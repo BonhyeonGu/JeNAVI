@@ -1,0 +1,6 @@
+PREFIX sta: <http://paper.9bon.org/ontologies/sensorthings/1.1.3#>
+
+SELECT ?thing
+WHERE {
+    ?thing a sta:Thing.
+}

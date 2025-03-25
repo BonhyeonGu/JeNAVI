@@ -1,0 +1,106 @@
+PREFIX tsc: <http://paper.9bon.org/ontologies/smartcity/0.2#>
+PREFIX sta: <http://paper.9bon.org/ontologies/sensorthings/1.1#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+SELECT ?areaName ?totalProduct
+WHERE {
+    ?city tsc:hasArea ?area.
+    ?area tsc:hasName ?areaName.
+
+    {
+        SELECT ?area (MAX(?vocResultTime) AS ?latestVocTime)
+        WHERE {
+            ?area tsc:hasThing/sta:hasMultiDatastream/sta:hasObservation ?vocObservation.
+            ?vocObservation sta:hasresultTime ?vocResultTime;
+                            sta:hasresult [
+                                sta:hasObservedProperty ?vocObsProp;
+                                sta:hasvalue ?vocValue
+                            ].
+            ?vocObsProp sta:hasname "voc".
+        }
+        GROUP BY ?area
+    }
+
+    {
+        SELECT ?area (MAX(?noiseResultTime) AS ?latestNoiseTime)
+        WHERE {
+            ?area tsc:hasThing/sta:hasMultiDatastream/sta:hasObservation ?noiseObservation.
+            ?noiseObservation sta:hasresultTime ?noiseResultTime;
+                               sta:hasresult [
+                                   sta:hasObservedProperty ?noiseObsProp;
+                                   sta:hasvalue ?noiseValue
+                               ].
+            ?noiseObsProp sta:hasname "noise".
+        }
+        GROUP BY ?area
+    }
+
+    {
+        SELECT ?area (MAX(?iluminanceResultTime) AS ?latestIluminanceTime)
+        WHERE {
+            ?area tsc:hasThing/sta:hasMultiDatastream/sta:hasObservation ?iluminanceObservation.
+            ?iluminanceObservation sta:hasresultTime ?iluminanceResultTime;
+                                   sta:hasresult [
+                                       sta:hasObservedProperty ?iluminanceObsProp;
+                                       sta:hasvalue ?iluminanceValue
+                                   ].
+            ?iluminanceObsProp sta:hasname "iluminance".
+        }
+        GROUP BY ?area
+    }
+
+    {
+        SELECT ?area (MAX(?trafficResultTime) AS ?latestTrafficTime)
+        WHERE {
+            ?area tsc:hasThing/sta:hasMultiDatastream/sta:hasObservation ?trafficObservation.
+            ?trafficObservation sta:hasresultTime ?trafficResultTime;
+                                sta:hasresult [
+                                    sta:hasObservedProperty ?trafficObsProp;
+                                    sta:hasvalue ?trafficValue
+                                ].
+            ?trafficObsProp sta:hasname "traffic_volume".
+        }
+        GROUP BY ?area
+    }
+
+    ?area tsc:hasThing/sta:hasMultiDatastream/sta:hasObservation ?latestVocObservation.
+    ?latestVocObservation sta:hasresultTime ?latestVocTime;
+                         sta:hasresult [
+                             sta:hasObservedProperty ?vocObsProp;
+                             sta:hasvalue ?voc
+                         ].
+    ?vocObsProp sta:hasname "voc".
+
+    ?area tsc:hasThing/sta:hasMultiDatastream/sta:hasObservation ?latestNoiseObservation.
+    ?latestNoiseObservation sta:hasresultTime ?latestNoiseTime;
+                            sta:hasresult [
+                                sta:hasObservedProperty ?noiseObsProp;
+                                sta:hasvalue ?noise
+                            ].
+    ?noiseObsProp sta:hasname "noise".
+
+    ?area tsc:hasThing/sta:hasMultiDatastream/sta:hasObservation ?latestIluminanceObservation.
+    ?latestIluminanceObservation sta:hasresultTime ?latestIluminanceTime;
+                                 sta:hasresult [
+                                     sta:hasObservedProperty ?iluminanceObsProp;
+                                     sta:hasvalue ?iluminance
+                                 ].
+    ?iluminanceObsProp sta:hasname "iluminance".
+
+    ?area tsc:hasThing/sta:hasMultiDatastream/sta:hasObservation ?latestTrafficObservation.
+    ?latestTrafficObservation sta:hasresultTime ?latestTrafficTime;
+                              sta:hasresult [
+                                  sta:hasObservedProperty ?trafficObsProp;
+                                  sta:hasvalue ?traffic_volume
+                              ].
+    ?trafficObsProp sta:hasname "traffic_volume".
+
+    BIND(xsd:decimal(?voc) AS ?vocDecimal)
+    BIND(xsd:decimal(?noise) AS ?noiseDecimal)
+    BIND(xsd:decimal(?iluminance) AS ?iluminanceDecimal)
+    BIND(xsd:decimal(?traffic_volume) AS ?trafficVolumeDecimal)
+
+    BIND((?vocDecimal * ?noiseDecimal * ?iluminanceDecimal * ?trafficVolumeDecimal) AS ?totalProduct)
+}
+ORDER BY DESC(?totalProduct)
+LIMIT 1

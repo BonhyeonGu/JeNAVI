@@ -1,0 +1,10 @@
+PREFIX tsc: <http://paper.9bon.org/ontologies/smartcity/0.2#>
+PREFIX sta: <http://paper.9bon.org/ontologies/sensorthings/1.1#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+INSERT {
+  ?child sta:islocationByLocation ?parent.
+}
+WHERE {
+  ?parent sta:haslocation ?child.
+}

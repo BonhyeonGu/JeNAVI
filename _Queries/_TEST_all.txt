@@ -1,0 +1,21 @@
+PREFIX sta: <http://paper.9bon.org/ontologies/sensorthings/1.1#>
+
+SELECT ?a ?averageValue
+WHERE {
+    {
+        SELECT ?a (AVG(?value) AS ?averageValue)
+        WHERE {
+            ?a sta:hasThing ?b.
+            ?b sta:hasMultiDatastream/sta:hasObservation ?observation.
+            ?observation sta:hasresultTime ?resultTime;
+                         sta:hasresult [
+                             sta:hasObservedProperty ?obsProp;
+                             sta:hasvalue ?value
+                         ].
+            ?obsProp sta:hasname "{{PROP}}".
+        }
+        GROUP BY ?a
+    }
+}
+ORDER BY {{SORT}}(?averageValue)
+LIMIT 1

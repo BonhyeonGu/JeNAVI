@@ -1,0 +1,9 @@
+PREFIX tsc: <http://paper.9bon.org/ontologies/smartcity/0.2#>
+
+SELECT ?level ?area ?areaName
+WHERE {
+  ?area a tsc:Area ;
+        tsc:hasLevel ?level ;
+        tsc:hasName ?areaName .
+}
+ORDER BY ?level

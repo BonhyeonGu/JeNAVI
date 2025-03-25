@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <title>Query Results</title>
+</head>
+<body>
+<h1>Results</h1>
+<table border="1">
+    <thead>
+    <tr>
+        <!-- 컬럼명을 나타내는 헤더 추가 (예: Property, Value 등) -->
+    </tr>
+    </thead>
+    <tbody>
+    <tr th:each="row : ${results}">
+        <td th:each="cell : ${row}" th:text="${cell}"></td>
+    </tr>
+    </tbody>
+</table>
+</body>
+</html>

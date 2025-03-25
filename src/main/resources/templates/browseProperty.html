@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <title>Property Details</title>
+    <style>
+        .cell-Property {
+            width: 800px;
+        }
+        .cell-Value {
+            width: 1100px;
+        }
+        .font {
+            font-size: 20px;
+        }
+        a, a:visited {
+            color: blue;
+            text-decoration: none;
+        }
+    </style>
+</head>
+<body>
+
+<h3 th:text="Execution time: ${executionTime}ms"></h3>
+<h2 th:text="${resourceURI}"></h2>
+
+<table border="1">
+    <thead>
+    <tr>
+        <th>Attribute</th>
+        <th>Value</th>
+    </tr>
+    </thead>
+    <tbody>
+    <th:block th:each="entry, stat : ${propertyDetails}" th:with="prev=${stat.index > 0 ? propertyDetails[stat.index - 1] : null}">
+        <!-- 만약 현재 항목의 첫 번째 원소와 이전 항목의 첫 번째 원소가 다르면 새로운 행을 시작합니다. -->
+        <tr class="font" th:if="${prev == null || entry[0] != prev[0]}">
+            <td class="cell-Property" th:text="${entry[0]}" th:rowspan="${entry[3]}"></td>
+            <td class="cell-Value">
+                <!-- 만약 2번째 인덱스의 값이 "x"가 아닌 경우 하이퍼링크로 표시합니다. -->
+                <a th:if="${entry[2] != 'x'}" th:href="@{'/browse/' + ${entry[2]}}" th:text="${entry[1]}"></a>
+                
+                <!-- 만약 2번째 인덱스의 값이 "x"인 경우 단순 텍스트로 표시합니다. -->
+                <span th:if="${entry[2] == 'x'}" th:text="${entry[1]}"></span>
+            </td>
+        </tr>
+        <!-- 만약 현재 항목의 첫 번째 원소와 이전 항목의 첫 번째 원소가 같으면 Value만 표시하는 새로운 행을 추가합니다. -->
+        <tr class="font" th:if="${prev != null && entry[0] == prev[0]}">
+            <td class="cell-Value">
+                <a class="font" th:if="${entry[2] != 'x'}" th:href="@{'/browse/' + ${entry[2]}}" th:text="${entry[1]}"></a>
+                <span class="font" th:if="${entry[2] == 'x'}" th:text="${entry[1]}"></span>
+            </td>
+        </tr>
+    </th:block>
+    </tbody>
+</table>
+
+</body>
+</html>

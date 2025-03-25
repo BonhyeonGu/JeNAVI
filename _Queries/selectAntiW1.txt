@@ -1,0 +1,99 @@
+PREFIX tsc: <http://paper.9bon.org/ontologies/smartcity/0.2#>
+PREFIX sta: <http://paper.9bon.org/ontologies/sensorthings/1.1#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+SELECT ?areaName ?totalProduct
+WHERE {
+    ?city tsc:hasArea ?area.
+    ?area tsc:hasName ?areaName.
+
+    # 최신 voc 값 가져오기
+    {
+        SELECT ?area (MAX(?resultTime) AS ?latestVocTime)
+        WHERE {
+            ?area tsc:hasThing/sta:hasMultiDatastream/sta:hasIndexpoint [
+                sta:pointToMultiObservedProperty/sta:hasname "voc";
+                sta:pointToresult ?vocResult
+            ].
+            ?vocResult sta:isresultByObservation/sta:hasresultTime ?resultTime.
+        }
+        GROUP BY ?area
+    }
+    
+    ?area tsc:hasThing/sta:hasMultiDatastream/sta:hasIndexpoint [
+        sta:pointToMultiObservedProperty/sta:hasname "voc";
+        sta:pointToresult ?vocResult
+    ].
+    ?vocResult sta:isresultByObservation/sta:hasresultTime ?latestVocTime;
+               sta:hasvalue ?voc.
+
+    # 최신 noise 값 가져오기
+    {
+        SELECT ?area (MAX(?resultTime) AS ?latestNoiseTime)
+        WHERE {
+            ?area tsc:hasThing/sta:hasMultiDatastream/sta:hasIndexpoint [
+                sta:pointToMultiObservedProperty/sta:hasname "noise";
+                sta:pointToresult ?noiseResult
+            ].
+            ?noiseResult sta:isresultByObservation/sta:hasresultTime ?resultTime.
+        }
+        GROUP BY ?area
+    }
+    
+    ?area tsc:hasThing/sta:hasMultiDatastream/sta:hasIndexpoint [
+        sta:pointToMultiObservedProperty/sta:hasname "noise";
+        sta:pointToresult ?noiseResult
+    ].
+    ?noiseResult sta:isresultByObservation/sta:hasresultTime ?latestNoiseTime;
+                 sta:hasvalue ?noise.
+
+    # 최신 iluminance 값 가져오기
+    {
+        SELECT ?area (MAX(?resultTime) AS ?latestIluminanceTime)
+        WHERE {
+            ?area tsc:hasThing/sta:hasMultiDatastream/sta:hasIndexpoint [
+                sta:pointToMultiObservedProperty/sta:hasname "iluminance";
+                sta:pointToresult ?iluminanceResult
+            ].
+            ?iluminanceResult sta:isresultByObservation/sta:hasresultTime ?resultTime.
+        }
+        GROUP BY ?area
+    }
+    
+    ?area tsc:hasThing/sta:hasMultiDatastream/sta:hasIndexpoint [
+        sta:pointToMultiObservedProperty/sta:hasname "iluminance";
+        sta:pointToresult ?iluminanceResult
+    ].
+    ?iluminanceResult sta:isresultByObservation/sta:hasresultTime ?latestIluminanceTime;
+                      sta:hasvalue ?iluminance.
+
+    # 최신 traffic_volume 값 가져오기
+    {
+        SELECT ?area (MAX(?resultTime) AS ?latestTrafficTime)
+        WHERE {
+            ?area tsc:hasThing/sta:hasMultiDatastream/sta:hasIndexpoint [
+                sta:pointToMultiObservedProperty/sta:hasname "traffic_volume";
+                sta:pointToresult ?trafficResult
+            ].
+            ?trafficResult sta:isresultByObservation/sta:hasresultTime ?resultTime.
+        }
+        GROUP BY ?area
+    }
+    
+    ?area tsc:hasThing/sta:hasMultiDatastream/sta:hasIndexpoint [
+        sta:pointToMultiObservedProperty/sta:hasname "traffic_volume";
+        sta:pointToresult ?trafficResult
+    ].
+    ?trafficResult sta:isresultByObservation/sta:hasresultTime ?latestTrafficTime;
+                   sta:hasvalue ?traffic_volume.
+
+    # 값 곱하기
+    BIND(xsd:decimal(?voc) AS ?vocDecimal)
+    BIND(xsd:decimal(?noise) AS ?noiseDecimal)
+    BIND(xsd:decimal(?iluminance) AS ?iluminanceDecimal)
+    BIND(xsd:decimal(?traffic_volume) AS ?trafficVolumeDecimal)
+
+    BIND((?vocDecimal * ?noiseDecimal * ?iluminanceDecimal * ?trafficVolumeDecimal) AS ?totalProduct)
+}
+ORDER BY DESC(?totalProduct)
+LIMIT 1

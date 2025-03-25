@@ -1,0 +1,29 @@
+PREFIX sta: <http://paper.9bon.org/ontologies/sensorthings/1.1#>
+
+SELECT ?a ?aggregateValue ?latestResultTime
+WHERE {{
+    ?a sta:hasThing ?b.
+    {{
+        SELECT ?b (MAX(?resultTime) AS ?latestResultTime)
+        WHERE {{
+            ?b sta:hasMultiDatastream/sta:hasObservation ?obs.
+            ?obs sta:hasresultTime ?resultTime;
+                 sta:hasresult [
+                     sta:hasObservedProperty ?obsProp;
+                     sta:hasvalue ?value
+                 ].
+            ?obsProp sta:hasname "{{PROP}}".
+        }}
+        GROUP BY ?b
+    }}
+    ?b sta:hasMultiDatastream/sta:hasObservation ?observation.
+    ?observation sta:hasresultTime ?latestResultTime;
+                 sta:hasresult [
+                     sta:hasObservedProperty ?obsProp;
+                     sta:hasvalue ?value
+                 ].
+    ?obsProp sta:hasname "{{PROP}}".
+    BIND(?value AS ?aggregateValue)
+}}
+ORDER BY {{SORT}}(?aggregateValue)
+LIMIT 1

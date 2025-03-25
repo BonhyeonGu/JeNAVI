@@ -1,0 +1,33 @@
+PREFIX tsc: <http://paper.9bon.org/ontologies/smartcity/0.2#>
+PREFIX sta: <http://paper.9bon.org/ontologies/sensorthings/1.1#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+SELECT ?area ?areaName ?latestResultTime ?latestPM ?avgPM
+WHERE {
+    {
+        SELECT ?areaName (AVG(?pm) AS ?avgPM)
+        WHERE {
+            ?area tsc:hasName ?areaName .
+            ?area tsc:hasThing/sta:hasMultiDatastream/sta:hasObservation ?observation .
+            ?observation sta:hasresultTime ?resultTime .
+            ?observation sta:hasresult [
+                sta:hasObservedProperty ?obsProp;
+                sta:hasvalue ?pm
+            ] .
+            ?obsProp sta:hasname "pm10"^^xsd:string.
+        }
+        GROUP BY ?areaName
+        ORDER BY DESC(?avgPM)
+        LIMIT 1
+    }
+    ?area tsc:hasName ?areaName .
+    ?area tsc:hasThing/sta:hasMultiDatastream/sta:hasObservation ?latestObservation .
+    ?latestObservation sta:hasresultTime ?latestResultTime .
+    ?latestObservation sta:hasresult [
+        sta:hasObservedProperty ?latestObsProp;
+        sta:hasvalue ?latestPM
+    ] .
+    ?latestObsProp sta:hasname "pm10"^^xsd:string.
+}
+ORDER BY DESC(?latestResultTime)
+LIMIT 1

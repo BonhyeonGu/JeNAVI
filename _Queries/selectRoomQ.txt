@@ -1,0 +1,54 @@
+PREFIX sta: <http://paper.9bon.org/ontologies/sensorthings/1.1#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+PREFIX bldg: <https://dataset-dl.liris.cnrs.fr/rdf-owl-urban-data-ontologies/Ontologies/CityGML/2.0/building#>
+PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+PREFIX geo: <http://www.opengis.net/ont/geosparql#>
+
+SELECT ?buildingPart ?buildingPartLabel ?room ?roomLabel ?asGML (SUM(?alpha * ?temp_penalty + ?beta * ?humidity_penalty) AS ?Q)
+WHERE {
+    ?room a bldg:Room ;
+          skos:altLabel ?roomLabel ;
+          bldg:Room.lod4MultiSurface/geo:asGML ?asGML .
+    
+    ?buildingPart a bldg:BuildingPart ;
+                  bldg:AbstractBuilding.interiorRoom ?room ;
+                  skos:altLabel ?buildingPartLabel .
+
+    OPTIONAL {
+        ?room sta:hasThing ?thing .
+
+        # 최신 Observation
+        {
+            SELECT ?thing (MAX(?resultTime) AS ?latestResultTime)
+            WHERE {
+                ?thing sta:hasMultiDatastream/sta:hasObservation ?obs .
+                ?obs sta:hasresultTime ?resultTime .
+            }
+            GROUP BY ?thing
+        }
+
+        ?thing sta:hasMultiDatastream/sta:hasObservation ?obs .
+        ?obs sta:hasresultTime ?latestResultTime ;
+             sta:hasresult [
+                 sta:hasObservedProperty ?obsProp ;
+                 sta:hasvalue ?value
+             ] .
+        ?obsProp sta:hasname ?obsPropName .
+        FILTER (?obsPropName IN ("temperature", "humidity"))
+
+        BIND(xsd:double(?value) AS ?numericValue)
+
+        # 기준값
+        BIND(22 AS ?desiredTemp)
+        BIND(50 AS ?desiredHumidity)
+
+        # 가중치
+        BIND(1.0 AS ?alpha)  # 온도 중요도 (α)
+        BIND(1.2 AS ?beta)   # 습도 중요도 (β)
+
+        # 페널티
+        BIND(IF(?obsPropName = "temperature", (?numericValue - ?desiredTemp) * (?numericValue - ?desiredTemp), 0) AS ?temp_penalty)
+        BIND(IF(?obsPropName = "humidity", (?numericValue - ?desiredHumidity) * (?numericValue - ?desiredHumidity), 0) AS ?humidity_penalty)
+    }
+}
+GROUP BY ?buildingPart ?buildingPartLabel ?room ?roomLabel ?asGML

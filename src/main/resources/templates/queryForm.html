@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <title>SPARQL Query Form</title>
+</head>
+<body>
+<h1>Enter SPARQL Query</h1>
+<form action="/executeQuery" method="post">
+    <textarea name="sparqlQuery" rows="10" cols="50"></textarea><br><br>
+    <input type="submit" value="Execute Query">
+</form>
+</body>
+</html>
