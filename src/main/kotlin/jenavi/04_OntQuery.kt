@@ -1,10 +1,9 @@
-package JenaController
+package jenavi
 //--------------------------------------------------------------------
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 //--------------------------------------------------------------------
 import org.apache.jena.ontology.OntModel
-import org.apache.jena.query.Query
 import org.apache.jena.query.QueryFactory
 import org.apache.jena.query.QueryExecutionFactory
 import org.apache.jena.query.ResultSet
@@ -14,21 +13,17 @@ import org.apache.jena.query.DatasetFactory
 import org.apache.jena.update.UpdateExecutionFactory
 import org.apache.jena.update.UpdateFactory
 import org.apache.jena.update.UpdateProcessor
-import org.apache.jena.rdf.model.ModelFactory
 //--------------------------------------------------------------------
 import org.apache.jena.query.ResultSetFormatter
 //--------------------------------------------------------------------
-import org.apache.jena.query.QueryExecution
 import org.apache.jena.query.ARQ
 import org.apache.jena.sparql.util.Context
 import org.apache.jena.update.UpdateRequest
 
 //--------------------------------------------------------------------
-import org.json.JSONObject
 import java.io.File
 //--------------------------------------------------------------------
 import kotlin.random.Random
-import kotlin.booleanArrayOf
 
 class OntQuery(val ont: OntModel, val cache: Boolean) {
     private val queries: MutableMap<String, String> = mutableMapOf()

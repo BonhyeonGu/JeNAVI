@@ -1,9 +1,7 @@
-package JenaController
+package jenavi
 
 import org.apache.jena.ontology.OntModel
-import org.apache.jena.ontology.OntModelSpec
 import org.apache.jena.rdf.model.ModelFactory
-import org.apache.jena.reasoner.ValidityReport
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 

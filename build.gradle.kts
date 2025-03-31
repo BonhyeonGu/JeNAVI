@@ -27,14 +27,14 @@ dependencies {
 	implementation("org.springframework.boot:spring-boot-starter-thymeleaf")
 	
 	// Logback
-	implementation("ch.qos.logback:logback-classic:1.4.9") // Logback Classic
-	implementation("ch.qos.logback:logback-core:1.4.9")
+	//implementation("ch.qos.logback:logback-classic:1.4.12") // Logback Classic
+	//implementation("ch.qos.logback:logback-core:1.4.12")
 
 	// Jena
     implementation("org.apache.jena", "apache-jena-libs", "5.0.0")
 
 	// JSON Read
-	implementation("org.json:json:20211205")
+	implementation("org.json:json:20231013")
 }
 
 tasks.withType<KotlinCompile> {

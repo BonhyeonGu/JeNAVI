@@ -1,4 +1,4 @@
-package JenaController
+package jenavi
 //--------------------------------------------------------------------
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
@@ -10,34 +10,15 @@ import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.ResponseBody // 문자열을 렌더링 없이 간단한 방법으로 출력
-
-import org.springframework.web.bind.annotation.RequestMapping
-import org.springframework.web.bind.annotation.RestController // JSON&XML
 //--------------------------------------------------------------------
-import org.apache.jena.query.QueryFactory
-import org.apache.jena.query.QueryExecutionFactory
-import org.apache.jena.query.ResultSet
-import org.apache.jena.query.ResultSetFormatter
 import org.apache.jena.ontology.OntModelSpec // RULE
 import org.apache.jena.riot.RiotException // Exc
-//--------------------------------------------------------------------
-import JenaController.Ontology
-import JenaController.Validate
-import JenaController.OntQuery
 //--------------------------------------------------------------------
 import java.time.LocalDateTime // 시간
 import java.time.format.DateTimeFormatter
 import java.io.FileOutputStream // 파일 입출력
-import org.json.JSONObject // JSON 객체
-import java.io.ByteArrayOutputStream // JSON 변환
 //--------------------------------------------------------------------
 import java.io.File
-import java.io.FileWriter
-import java.io.BufferedWriter
-import java.nio.file.Files
-import java.nio.file.Paths
-import java.nio.file.attribute.PosixFilePermission
-import java.nio.file.attribute.PosixFilePermissions
 //--------------------------------------------------------------------
 import org.w3c.dom.*
 import javax.xml.parsers.DocumentBuilderFactory
@@ -197,7 +178,7 @@ class WebController : AutoCloseable {
         val filename = "./" + currentDateTime.format(formatter) + ".rdf"
 
         FileOutputStream(filename).use { outStream ->
-            WebController.ont.write(outStream, "RDF/XML")
+            ont.write(outStream, "RDF/XML")
         }
 
         fixRdfStringLiterals(filename)
@@ -225,7 +206,7 @@ class WebController : AutoCloseable {
         try {
             // 2. RDF/XML 저장
             FileOutputStream(file).use { outStream ->
-                WebController.ont.write(outStream, "RDF/XML")
+                ont.write(outStream, "RDF/XML")
             }
 
             // 3. 후처리

@@ -1,4 +1,4 @@
-package JenaController
+package jenavi
 
 //--------------------------------------------------------------------
 import org.slf4j.Logger
@@ -10,9 +10,7 @@ import org.apache.jena.ontology.OntDocumentManager
 //--------------------------------------------------------------------
 import org.apache.jena.rdf.model.ModelFactory
 //import org.apache.jena.tdb.TDBFactory // 온메모리를 하지 않을 때 고려되어야 함
-import org.apache.jena.reasoner.ValidityReport
 //--------------------------------------------------------------------
-import org.apache.jena.vocabulary.RDFS
 import org.apache.jena.riot.RiotException
 //--------------------------------------------------------------------
 import java.io.File // RDF 읽을 때 사용
