@@ -25,7 +25,7 @@ dependencies {
 	testImplementation("org.springframework.boot:spring-boot-starter-test")
 	implementation("org.springframework.boot:spring-boot-starter-web")
 	implementation("org.springframework.boot:spring-boot-starter-thymeleaf")
-	
+
 	// Logback
 	//implementation("ch.qos.logback:logback-classic:1.4.12") // Logback Classic
 	//implementation("ch.qos.logback:logback-core:1.4.12")
@@ -35,6 +35,10 @@ dependencies {
 
 	// JSON Read
 	implementation("org.json:json:20231013")
+
+	// Kotlin + Jackson 연동 모듈
+	implementation("com.fasterxml.jackson.module:jackson-module-kotlin")
+
 }
 
 tasks.withType<KotlinCompile> {

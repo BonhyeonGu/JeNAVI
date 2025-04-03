@@ -7,9 +7,10 @@ import org.springframework.stereotype.Controller
 import org.springframework.ui.Model
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PostMapping
-import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.ResponseBody // 문자열을 렌더링 없이 간단한 방법으로 출력
+import org.springframework.web.bind.annotation.RequestBody
+import org.springframework.http.ResponseEntity
 //--------------------------------------------------------------------
 import org.apache.jena.ontology.OntModelSpec // RULE
 import org.apache.jena.riot.RiotException // Exc
@@ -26,6 +27,19 @@ import javax.xml.transform.TransformerFactory
 import javax.xml.transform.dom.DOMSource
 import javax.xml.transform.stream.StreamResult
 
+
+import java.io.FileInputStream
+
+data class ApiResponse<T>(
+    val status: String,
+    val executionTimeMs: Long,
+    val data: T?
+)
+
+data class SparqlRequest(
+    val query: String
+)
+
 // ./gradlew bootRun 
 @Controller
 class WebController : AutoCloseable {
@@ -35,12 +49,6 @@ class WebController : AutoCloseable {
         val ont = Ontology(rule = RULE).ontologyModel
         val ontQ = OntQuery(ont, cache = false)
     }
-
-    data class ApiResponse<T>(
-        val status: String,
-        val executionTimeMs: Long,
-        val data: T?
-    )
 
     override fun close() {
         // 필요하다면 리소스 정리 코드 작성
@@ -141,8 +149,8 @@ class WebController : AutoCloseable {
 
 
     //Query Update
-    @GetMapping("/reloadQuery")
-    fun reloadQuery(model: Model): String {
+    @GetMapping("/queryReload")
+    fun queryReload(model: Model): String {
         logger.info("User Request /reloadQuery")
         ontQ.reloadQuery()
         model.addAttribute("message", "Finish : reloadQuery")
@@ -150,18 +158,45 @@ class WebController : AutoCloseable {
     }
 
 
-    //
     @GetMapping("/queryForm")
-    fun showQueryForm(): String {
+    fun queryForm(): String {
         return "queryForm"
     }
 
+    fun normalizeQuery(query: String): String {
+        return query
+            .lines()
+            .map { it.replace(Regex("[\\uFEFF\\u00A0\\u3000\\r\\t]"), "").trimStart() }
+            .joinToString("\n")
+            .trim()
+    }
 
-    @PostMapping("/executeQuery")
-    fun executeQuery(@RequestParam sparqlQuery: String, model: Model): String {
-        val resultsList = ontQ.executeSPARQL(sparqlQuery)
-        model.addAttribute("results", resultsList)
-        return "queryResults"
+
+    @PostMapping("/queryRun")
+    @ResponseBody
+    fun queryRun(@RequestBody request: SparqlRequest): ResponseEntity<ApiResponse<Any>> {
+        logger.info("User Request /queryRun")
+        return try {
+            val (executionTime, result) = ontQ.qRun(normalizeQuery(request.query))
+            val status = if (result.isEmpty()) "ok (no result or update)" else "ok"
+            ResponseEntity.ok(
+                ApiResponse(
+                    status = status,
+                    executionTimeMs = executionTime,
+                    data = result
+                )
+            )
+        } catch (e: Exception) {
+            ResponseEntity
+                .badRequest()
+                .body(
+                    ApiResponse(
+                        status = "error: ${e.message}",
+                        executionTimeMs = 0,
+                        data = null
+                    )
+                )
+        }
     }
 
 
@@ -286,46 +321,61 @@ class WebController : AutoCloseable {
     // 적재된 것을 일괄적으로 적용함
     @GetMapping("/ReadyToUpdate")
     @ResponseBody
-    fun readyToUpdate(model: Model): Map<String, Any> {
+    fun readyToUpdate(model: Model): ResponseEntity<ApiResponse<Any>> {
         logger.info("User Request /ReadyToUpdate")
         val pDir = "./_TUN_UpdateReady"
         val directory = File(pDir)
 
-        if (directory.exists() && directory.isDirectory) {
+        return if (directory.exists() && directory.isDirectory) {
             val files = directory.listFiles()
-            val startTime = System.currentTimeMillis() // 시간 측정 시작
             var successCount = 0
             var failureCount = 0
+            var totalParsingTime: Long = 0
 
             files?.forEach { file ->
-                logger.info("Read RDF => ${pDir}/${file.name}")
                 try {
-                    ont.read(file.absolutePath)
-                    successCount++
-
-                    // 파일 삭제
-                    if (file.delete()) {
-                        logger.info("Successfully deleted: ${file.name}")
-                    } else {
-                        logger.warn("Failed to delete: ${file.name}")
+                    val inputStream = FileInputStream(file)
+                    inputStream.use {
+                        val parseStart = System.currentTimeMillis()
+                        ont.read(it, null, "RDF/XML")
+                        val parseEnd = System.currentTimeMillis()
+                        totalParsingTime += (parseEnd - parseStart)
                     }
+                    successCount++
                 } catch (e: RiotException) {
                     logger.error("RiotException => ${pDir}/${file.name}")
                     failureCount++
+                } catch (e: Exception) {
+                    logger.error("Unexpected exception => ${e.message}")
+                    failureCount++
                 }
             }
-            val endTime = System.currentTimeMillis()
 
-            logger.info("ont.read completed in ${endTime - startTime} ms")
-            return mapOf(
-                "resultTime" to (endTime - startTime),
-                "successCount" to successCount,
-                "failureCount" to failureCount
+            // RDF 읽기 이후 삭제
+            files?.forEach { file ->
+                file.delete()
+            }
+
+            logger.info("ont.read parsing only time: $totalParsingTime ms")
+
+            ResponseEntity.ok(
+                ApiResponse(
+                    status = "ok",
+                    executionTimeMs = totalParsingTime,
+                    data = mapOf(
+                        "successCount" to successCount,
+                        "failureCount" to failureCount
+                    )
+                )
             )
         } else {
             logger.error("The provided path is not a valid directory.")
-            return mapOf(
-                "error" to "Invalid directory"
+            ResponseEntity.badRequest().body(
+                ApiResponse(
+                    status = "error",
+                    executionTimeMs = 0,
+                    data = mapOf("error" to "Invalid directory")
+                )
             )
         }
     }
@@ -349,13 +399,13 @@ class WebController : AutoCloseable {
                 try {
                     ont.read(file.absolutePath)
                     successCount++
-
+                    file.delete()
                     // 파일 삭제
-                    if (file.delete()) {
-                        logger.info("Successfully deleted: ${file.name}")
-                    } else {
-                        logger.warn("Failed to delete: ${file.name}")
-                    }
+                    //if (file.delete()) {
+                    //    logger.info("Successfully deleted: ${file.name}")
+                    //} else {
+                    //    logger.warn("Failed to delete: ${file.name}")
+                    //}
                 } catch (e: RiotException) {
                     logger.error("RiotException => ${pDir}/${file.name}")
                     failureCount++
@@ -377,17 +427,7 @@ class WebController : AutoCloseable {
         }
     }
 
-    // 옵저베이션 삭제, 구현중
-    @GetMapping("/DeleteObservation/{n}")
-    @ResponseBody
-    fun deleteObservation(@PathVariable n: Int): Map<String, Any> {
-        logger.info("User Request /DeleteObservation/$n")
-        val et = ontQ.deleteObservationAllThings(n)
-        return mapOf(
-            "et" to et
-        )
-    }
-    
+
 //=====================================================================================================
 
     @GetMapping("/debugUpdate/{pName}")

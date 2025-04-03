@@ -10,15 +10,12 @@ import org.apache.jena.query.ResultSet
 //--------------------------------------------------------------------
 import org.apache.jena.query.Dataset
 import org.apache.jena.query.DatasetFactory
-import org.apache.jena.update.UpdateExecutionFactory
-import org.apache.jena.update.UpdateFactory
-import org.apache.jena.update.UpdateProcessor
+import org.apache.jena.update.*
 //--------------------------------------------------------------------
 import org.apache.jena.query.ResultSetFormatter
 //--------------------------------------------------------------------
 import org.apache.jena.query.ARQ
 import org.apache.jena.sparql.util.Context
-import org.apache.jena.update.UpdateRequest
 
 //--------------------------------------------------------------------
 import java.io.File
@@ -525,284 +522,77 @@ class OntQuery(val ont: OntModel, val cache: Boolean) {
     }
 
 
-    fun TESTdebugUpdateRand() {
-        val propNames = listOf("temperature", "humidity", "dustLevel", "fineDustLevel", "veryFineDustLevel")
-        for (pName in propNames) {
-            logger.info("Q:TESTdebugUpdateRand : " + pName)
-            val dataset = DatasetFactory.create(ont) // `ont` should be your ontology model
-            val observations = TESTfetchObservations(dataset)
-            val peopleCounts = observations.map { generateRandom(pName) }
-            val valuesClause = observations.zip(peopleCounts).joinToString("\n") { (obs, count) ->
-                "(<${obs.second}> \"$count\"^^xsd:double)"
-            }
-
-            val queryStringUpdate = """
-                PREFIX tsc: <http://paper.9bon.org/ontologies/smartcity/0.2#>
-                PREFIX sta: <http://paper.9bon.org/ontologies/sensorthings/1.1#>
-                PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
-                
-                DELETE {
-                    ?result sta:hasvalue ?oldValue.
-                }
-                INSERT {
-                    ?result sta:hasvalue ?newValue.
-                }   
-                WHERE {
-                    VALUES (?obs ?newValue) {
-                        ${valuesClause}
-                    }
-                    ?obs sta:hasresult ?result.
-                    ?result sta:hasObservedProperty ?obsProp;
-                            sta:hasvalue ?oldValue.
-                    ?obsProp sta:hasname "${pName}"^^xsd:string.
-                }
-            """.trimIndent()
-
-            val update = UpdateFactory.create(queryStringUpdate)
-            val updateProcessor = UpdateExecutionFactory.create(update, dataset)
-            val startTime = System.currentTimeMillis()
-            try {
-                updateProcessor.execute()
-                logger.info("Random Updated successfully")
-            } catch (e: Exception) {
-                logger.info("Failed to update random people count: $e")
-            }
-            val endTime = System.currentTimeMillis()
-            logger.info("End: ${endTime-startTime}")
-        }
-        return
-    }
-
 //=============================================================================================
     
-    // Know
+    // Query
+    fun detectQueryType(queryStr: String): String {
+        val regex = Regex("(?i)^(?:\\s*prefix\\s+\\w*:\\s*<[^>]+>\\s*)*(\\w+)")
+        val match = regex.find(queryStr)
+        return match?.groupValues?.get(1)?.lowercase() ?: "unknown"
+    }
 
-    fun qUpdate(qName: String): Long {
-        val queryString = queries[qName]?.trimIndent() ?: return -1.0.toLong()
-        val update = UpdateFactory.create(queryString)
-        
-        val dataset = DatasetFactory.create(ont)
-        val updateProcessor = createUpdateExecution(update, dataset)
+    fun qRun(queryStr: String): Pair<Long, MutableList<List<String>>> {
+        return when (val queryType = detectQueryType(queryStr)) {
+            "select", "ask", "describe", "construct" -> qSelect(queryStr)
+            "insert", "delete", "load", "create", "drop", "add", "move", "copy", "clear", "with" -> {
+                val time = qUpdate(queryStr)
+                Pair(time, mutableListOf())
+            }
+            else -> throw IllegalArgumentException("Unsupported or unrecognized SPARQL query type: $queryType")
+        }
+    }
 
-        val startTime = System.currentTimeMillis()  
-        updateProcessor.execute()
+    
+    private fun qSelect(queryStr: String): Pair<Long, MutableList<List<String>>> {
+        val query = QueryFactory.create(queryStr)
+        val qexec = QueryExecutionFactory.create(query, ont)
+
+        val startTime = System.currentTimeMillis()
+        val resSet = qexec.execSelect()
         val endTime = System.currentTimeMillis()
-        
+
+        val exeTime = endTime - startTime
+        val resList: MutableList<List<String>> = mutableListOf()
+
+        // 컬럼 이름을 가져오기
+        val resultVars = resSet.resultVars
+
+        while (resSet.hasNext()) {
+            val qs = resSet.nextSolution()
+            val row = mutableListOf<String>()
+
+            // 각 컬럼 변수명에 대해 결과 가져오기
+            for (varName in resultVars) {
+                val node = qs.get(varName)
+                val value = when {
+                    node == null -> "null"
+                    node.isLiteral -> node.asLiteral().value.toString()
+                    node.isResource -> node.asResource().uri ?: node.asResource().toString()
+                    else -> node.toString()
+                }
+                row.add(value)
+            }
+
+            resList.add(row)
+        }
+
+        qexec.close()
+        return Pair(exeTime, resList)
+    }
+
+
+    private fun qUpdate(queryStr: String): Long {
+        val startTime = System.currentTimeMillis()
+
+        val updateRequest = UpdateFactory.create(queryStr)
+        UpdateAction.execute(updateRequest, ont)  // `ont`는 Dataset 또는 Model
+
+        val endTime = System.currentTimeMillis()
         return endTime - startTime
     }
-    
-    
-    fun qSelectOne(qName: String): List<String> {
-        val queryString = queries[qName]?.trimIndent() ?: return emptyList()
 
-        val query = QueryFactory.create(queryString)
-        val qexec = QueryExecutionFactory.create(query, ont)
-
-        val startTime = System.currentTimeMillis()
-        val resultSet = qexec.execSelect()
-        val endTime = System.currentTimeMillis()
-    
-        var resultList: List<String> = emptyList()
-        if (resultSet.hasNext()) {
-            val qs = resultSet.nextSolution()
-            if (qName == "selectTempMax0" || qName == "selectTempMax1") {
-                val area = qs.getResource("area")?.uri ?: "Unknown"
-                val areaName = qs.getLiteral("areaName")?.string ?: "Unknown"
-                val resultTime = qs.getLiteral("resultTime")?.string ?: "Unknown"
-                val temperature = qs.getLiteral("temperature")?.string ?: "Unknown"
-                resultList = listOf(
-                    (endTime - startTime).toString(),
-                    area,
-                    areaName,
-                    resultTime,
-                    temperature
-                )
-            }
-            else if (qName == "selectPMAvgMax0" || qName == "selectPMAvgMax1") {
-                val area = qs.getResource("area")?.uri ?: "Unknown"
-                val areaName = qs.getLiteral("areaName")?.string ?: "Unknown"
-                val latestResultTime = qs.getLiteral("latestResultTime")?.string ?: "Unknown"
-                val latestTemperature = qs.getLiteral("latestPM")?.string ?: "Unknown"
-                val avgPM = qs.getLiteral("avgPM")?.string ?: "Unknown"
-
-                resultList = listOf(
-                    (endTime - startTime).toString(),
-                    area,
-                    areaName,
-                    latestResultTime,
-                    latestTemperature,
-                    avgPM
-                )
-            }
-            else if (qName == "selectLLToLight0" || qName == "selectLLToLight1") {
-                val area = qs.getResource("area")?.uri ?: "Unknown"
-                val areaName = qs.getLiteral("areaName")?.string ?: "Unknown"
-                val avgTraffic = qs.getLiteral("avgTraffic")?.string ?: "Unknown"
-                val avgIlluminance = qs.getLiteral("avgIlluminance")?.string ?: "Unknown"
-                val ratio = qs.getLiteral("ratio")?.string ?: "Unknown"
-
-                resultList = listOf(
-                    (endTime - startTime).toString(),
-                    area,
-                    areaName,
-                    avgTraffic,
-                    avgIlluminance,
-                    ratio
-                )
-            }
-        }
-
-        qexec.close()
-        return resultList
-    }
-
-
-    fun qSelectMany(qName: String): Pair<Long, MutableList<List<String>>>  {
-        val queryString = queries[qName]?.trimIndent() ?: return Pair(0L, mutableListOf())
-    
-        val query = QueryFactory.create(queryString)
-        val qexec = QueryExecutionFactory.create(query, ont)
-    
-        val startTime = System.currentTimeMillis()
-        val resultSet = qexec.execSelect()
-        val endTime = System.currentTimeMillis()
-    
-        val executionTime = endTime - startTime
-        val resultList: MutableList<List<String>> = mutableListOf()
-    
-        if (qName == "selectLevel") {
-            while (resultSet.hasNext()) {
-                val qs = resultSet.nextSolution()
-    
-                val level = qs.getResource("level")?.uri ?: "Unknown"
-                val area = qs.getResource("area")?.uri ?: "Unknown"
-                val areaName = qs.getLiteral("areaName")?.string ?: "Unknown"
-    
-                resultList.add(
-                    listOf(
-                        executionTime.toString(),
-                        level,
-                        area,
-                        areaName
-                    )
-                )
-            }
-        }
-
-        else if (qName == "selectRoomQ") {
-            while (resultSet.hasNext()) {
-                val qs = resultSet.nextSolution()
-
-                
-                val buildingPart = qs.getResource("buildingPart")?.uri ?: "Unknown" // 방의 URI
-                val buildingPartLabel = qs.getLiteral("buildingPartLabel")?.string ?: "Unknown"
-                val roomUri = qs.getResource("room")?.uri ?: "Unknown" // 방의 URI
-                val roomLabel = qs.getLiteral("roomLabel")?.string ?: "Unknown"
-                val roomGeo = qs.getLiteral("asGML")?.string ?: "Unknown"
-                val qualityIndex = qs.getLiteral("Q")?.double ?: Double.NaN // 계산된 Q 값
-                resultList.add(
-                    listOf(
-                        executionTime.toString(),
-                        buildingPart,
-                        buildingPartLabel,
-                        roomUri,
-                        roomLabel,
-                        roomGeo,
-                        qualityIndex.toString()
-                    )
-                )
-            }
-        }
-
-        //이제부터 소요시간 리턴 따로함
-        else if (qName == "selectThingAll") {
-            while (resultSet.hasNext()) {
-                val qs = resultSet.nextSolution()
-                val thing = qs.getResource("thing")?.uri ?: "Unknown"
-                resultList.add(
-                    listOf(
-                        thing
-                    )
-                )
-            }
-        }
-    
-        qexec.close()
-        return Pair(executionTime, resultList)
-    }
-
-    
-    fun TESTqSelectOne(q0: String, q1: String, q2: String): List<String> {
-        val queryString = when (q0) {
-            "realtime" -> queries["_TEST_realTime"]?.trimIndent()
-            "all" -> queries["_TEST_all"]?.trimIndent()
-            else -> return emptyList()
-        } ?: return emptyList()
-    
-        val modifiedQueryString = queryString
-            .replace("{{SORT}}", q1)
-            .replace("{{PROP}}", q2)
-
-        val query = QueryFactory.create(modifiedQueryString)
-        val qexec = QueryExecutionFactory.create(query, ont)
-
-        val startTime = System.currentTimeMillis()
-        val resultSet = qexec.execSelect()
-        val endTime = System.currentTimeMillis()
-    
-        var resultList: List<String> = emptyList()
-        if (resultSet.hasNext()) {
-            val qs = resultSet.nextSolution()
-            val id = qs.getResource("a")?.uri ?: "Unknown"
-            val value = when (q0) {
-                "realtime" -> qs.getLiteral("aggregateValue")?.string ?: "Unknown"
-                "all" -> qs.getLiteral("averageValue")?.string ?: "Unknown"
-                else -> "?"
-            }
-            val resultTime = when (q0) {
-                "realtime" -> qs.getLiteral("latestResultTime")?.string ?: "Unknown"
-                "all" -> "?"
-                else -> "?"
-            }
-        
-            resultList = listOf(
-                (endTime - startTime).toString(),
-                id,
-                value,
-                resultTime
-            )
-        }
-
-        qexec.close()
-        return resultList
-    }
-    
 //=============================================================================================
 
-    // Delete
-
-    fun deleteObservationAllThings(n: Int): Long {
-        val timeStartAll = System.currentTimeMillis()
-        val (et, resultList) = qSelectMany("selectThingAll")
-        logger.info("deleteObservationAllThings: selectThingAll: ${et}")
-
-        val dataset = DatasetFactory.create(ont)
-        val queryStr = queries["deleteObservation"]?.trimIndent() ?: return 0L
-        val modQueryStr0 = queryStr.replace("{{n}}", n.toString())
-
-        for (result in resultList) {
-            val thingUri = result[0]
-            val modQueryStr1 = modQueryStr0.replace("{{THING_URI}}", "<"+thingUri+">")
-            val updateRequest: UpdateRequest = UpdateFactory.create(modQueryStr1)
-            val qexec = UpdateExecutionFactory.create(updateRequest, dataset)
-            val timeS = System.currentTimeMillis()
-            qexec.execute()
-            val timeE = System.currentTimeMillis()
-            logger.info("deleteObservationAllThings: deleteObservation: ${timeE-timeS}")
-        }
-        val timeEndAll = System.currentTimeMillis()
-        return timeEndAll-timeStartAll
-    }
 
 
 //=============================================================================================

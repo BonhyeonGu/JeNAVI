@@ -18,10 +18,9 @@ import java.io.File // RDF 읽을 때 사용
 class Ontology(val rule: OntModelSpec) {
     companion object {
         private val logger: Logger = LoggerFactory.getLogger(Ontology::class.java)
-        const val TDB_LOCALE = "./_TDB"
-        const val RDF_LOCALE = "./_RDF"
-        const val OWL_LOCALE = "./_OWL"
-        val OWL_LOCALES: Array<String> = arrayOf(
+        const val PATH_DIR_RDF = "./_RDF"
+        const val PATH_DIR_OWL = "./_OWL"
+        val PATH_DIR_OWLS: Array<String> = arrayOf(
             "http://paper.9bon.org/ontologies/sensorthings/1.1.3",
             //"http://paper.9bon.org/ontologies/smartcity/0.2",
             "http://paper.9bon.org/ontologies/dtom/1.0"
@@ -48,7 +47,7 @@ class Ontology(val rule: OntModelSpec) {
 
     init {
         // 작성한 OWL들을 불러옴
-        OWL_LOCALES.forEach { url ->
+        PATH_DIR_OWLS.forEach { url ->
             logger.info("Try read URL => $url")
             readStatusMap[url] = true
             try {
@@ -69,8 +68,8 @@ class Ontology(val rule: OntModelSpec) {
         }
 
         //!!!!OWL과 RDF를 읽는 방법이 다른지 추가적인 조사가 필요하다.!!!!
-        readRDF(OWL_LOCALE)
-        readRDF(RDF_LOCALE)
+        readRDF(PATH_DIR_OWL)
+        readRDF(PATH_DIR_RDF)
         logger.info("")
         logger.info("")
         logger.info("Successfully read the following URLs without errors:")
@@ -89,11 +88,11 @@ class Ontology(val rule: OntModelSpec) {
         if (directory.exists() && directory.isDirectory) {
             val files = directory.listFiles()
             files?.forEach { file ->
-                logger.info("Read RDF => ${RDF_LOCALE}/${file.name}")
+                logger.info("Read RDF => ${PATH_DIR_RDF}/${file.name}")
                 try {
                     ontologyModel.read(file.absolutePath)
                 } catch (e: RiotException) {
-                    logger.error("RiotException => ${RDF_LOCALE}/${file.name}")
+                    logger.error("RiotException => ${PATH_DIR_RDF}/${file.name}")
                 }
             }
         } else {
