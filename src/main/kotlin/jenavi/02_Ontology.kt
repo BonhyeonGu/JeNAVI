@@ -12,6 +12,8 @@ import org.apache.jena.rdf.model.ModelFactory
 //import org.apache.jena.tdb.TDBFactory // 온메모리를 하지 않을 때 고려되어야 함
 //--------------------------------------------------------------------
 import org.apache.jena.riot.RiotException
+import org.apache.jena.vocabulary.RDF//통계에서
+import org.apache.jena.rdf.model.RDFNode
 //--------------------------------------------------------------------
 import java.io.File // RDF 읽을 때 사용
 
@@ -70,6 +72,7 @@ class Ontology(val rule: OntModelSpec) {
         //!!!!OWL과 RDF를 읽는 방법이 다른지 추가적인 조사가 필요하다.!!!!
         readRDF(PATH_DIR_OWL)
         readRDF(PATH_DIR_RDF)
+        calcStatistics()
         logger.info("")
         logger.info("")
         logger.info("Successfully read the following URLs without errors:")
@@ -98,6 +101,45 @@ class Ontology(val rule: OntModelSpec) {
         } else {
             logger.error("The provided path is not a valid directory.")
         }
+    }
+
+    private fun calcStatistics() {
+        val classUris = mutableSetOf<String>()
+        val classWithInstances = mutableSetOf<String>()
+        var totalInstances = 0
+
+        val statements = ontologyModel.listStatements(null, RDF.type, null as RDFNode?)
+        while (statements.hasNext()) {
+            val stmt = statements.nextStatement()
+            val obj = stmt.`object`
+            if (obj.isResource) {
+                val classUri = obj.asResource().uri
+                if (classUri != null) {
+                    classUris.add(classUri)
+                    classWithInstances.add(classUri)
+                    totalInstances++
+                }
+            }
+        }
+
+        // 정의된 클래스 추출
+        val definedClasses = ontologyModel.listClasses()
+            .toList()
+            .mapNotNull { it.uri }
+            .toSet()
+
+        val totalClassCount = definedClasses.size
+        val classWithInstanceCount = definedClasses.intersect(classWithInstances).size
+
+        val classRichness = if (totalClassCount > 0) classWithInstanceCount.toDouble() / totalClassCount else 0.0
+        val averagePopulation = if (totalClassCount > 0) totalInstances.toDouble() / totalClassCount else 0.0
+
+        logger.info("📊 온톨로지 통계 요약:")
+        logger.info("전체 클래스 수 (정의된 owl:Class): $totalClassCount")
+        logger.info("인스턴스가 존재하는 클래스 수: $classWithInstanceCount")
+        logger.info("전체 인스턴스 수 (rdf:type 포함): $totalInstances")
+        logger.info("Class Richness (CR): %.3f".format(classRichness))
+        logger.info("Average Population (AP): %.3f".format(averagePopulation))
     }
 
     private fun removeBOM(file: File): File {
