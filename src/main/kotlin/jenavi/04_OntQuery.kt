@@ -644,7 +644,6 @@ class OntQuery(val ont: OntModel, val cache: Boolean) {
         }
     }
 
-
     private fun qUpdate(queryStr: String, dataset: Dataset): Long {
         dataset.begin(ReadWrite.WRITE)
         return try {
