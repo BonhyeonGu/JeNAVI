@@ -1,5 +1,6 @@
 package jenavi
 //--------------------------------------------------------------------
+import org.apache.jena.ontology.OntModel
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 //--------------------------------------------------------------------
@@ -27,8 +28,10 @@ import javax.xml.transform.TransformerFactory
 import javax.xml.transform.dom.DOMSource
 import javax.xml.transform.stream.StreamResult
 
-
+import jenavi.config.OntologyProperties
 import java.io.FileInputStream
+
+import org.apache.jena.tdb2.TDB2Factory
 
 data class ApiResponse<T>(
     val status: String,
@@ -40,18 +43,16 @@ data class SparqlRequest(
     val query: String
 )
 
-// ./gradlew bootRun 
+// ./gradlew bootRun
 @Controller
-class WebController : AutoCloseable {
-    companion object {
-        val RULE = OntModelSpec.OWL_MEM_TRANS_INF
-        private val logger: Logger = LoggerFactory.getLogger(WebController::class.java)
-        val ont = Ontology(rule = RULE).ontologyModel
-        val ontQ = OntQuery(ont, cache = false)
-    }
+class WebController(
+    private var ont: OntModel
+) : AutoCloseable {
+
+    private val logger: Logger = LoggerFactory.getLogger(WebController::class.java)
+    private var ontQ: OntQuery = OntQuery(ont, cache = false)
 
     override fun close() {
-        // 필요하다면 리소스 정리 코드 작성
         println("WebController closed.")
     }
 
@@ -59,6 +60,17 @@ class WebController : AutoCloseable {
     fun index(model: Model): String {
         logger.debug("User Request /")
         model.addAttribute("message", "Index")
+        return "index"
+    }
+
+    @GetMapping("/init")
+    fun initOntology(model: Model): String {
+        logger.info("User Request /init : Reinitializing ontology")
+        val useTDB = OntologyProperties.useTDB
+        val newOntology = Ontology.createOntology(useTDB)
+        ont = newOntology.ontologyModel
+        ontQ = OntQuery(ont, cache = false)
+        model.addAttribute("message", "Ontology reloaded with cache disabled.")
         return "index"
     }
 
@@ -79,82 +91,92 @@ class WebController : AutoCloseable {
     fun browseResource(@PathVariable resource: String, model: Model): String {
         logger.debug("User Request /browse/$resource")
 
-        var startTime: Long = 0
-        var endTime: Long = 0
-        var executionTime: Long = 0
-
+        val useTDB = OntologyProperties.useTDB
         val resourceURI = ontQ.deShort(resource)
         model.addAttribute("resourceURI", resourceURI)
-        if (ontQ.isProperty(resourceURI)) {
-            startTime = System.currentTimeMillis()
-            val q = """ 
-                PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-                PREFIX owl: <http://www.w3.org/2002/07/owl#>
-                PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-        
-                SELECT ?property ?value WHERE {
-                    {
-                        <$resourceURI> rdfs:domain ?domainClass.
-                        ?domainClass owl:unionOf ?classList.
-                        ?classList rdf:rest*/rdf:first ?value.
-                        BIND (rdfs:domain AS ?property)
-                    }
-                    UNION
-                    {
-                        <$resourceURI> rdfs:range ?value.
-                        BIND (rdfs:range AS ?property)
-                    }
-                    UNION
-                    {
-                        <$resourceURI> owl:restriction ?value.
-                        BIND (owl:restriction AS ?property)
-                    }
-                }
-            """.trimIndent()
-            val propertyDetails = ontQ.browseQuery(q)
-            endTime = System.currentTimeMillis()
-            executionTime = endTime - startTime
-            model.addAttribute("executionTime", executionTime)
-            model.addAttribute("propertyDetails", propertyDetails)
-            return "browseProperty"
+
+        val isProperty = if (useTDB) {
+            val dataset = TDB2Factory.connectDataset("./_TDB")
+            ontQ.isProperty(resourceURI, dataset)
         } else {
-            startTime = System.currentTimeMillis()
-            var q = """
-                SELECT ?property ?value WHERE {
-                    <$resourceURI> ?property ?value.
-                }   
-            """.trimIndent()
-            var resourceInfo = ontQ.browseQuery(q)
-            endTime = System.currentTimeMillis()
-            val executionTime0 = endTime - startTime
-            model.addAttribute("executionTime0", executionTime0)
-            model.addAttribute("resourceInfo", resourceInfo)
-
-            startTime = System.currentTimeMillis()
-            q = """
-                SELECT ?property ?value WHERE {
-                    ?value ?property <$resourceURI>.
-                }
-            """.trimIndent()
-            
-            resourceInfo = ontQ.browseQuery(q)
-            endTime = System.currentTimeMillis()
-            val executionTime1 = endTime - startTime
-            model.addAttribute("executionTime1", executionTime1)
-            model.addAttribute("resourceInfoReverse", resourceInfo)
-
-            return "browse"
+            ontQ.isProperty(resourceURI)
         }
-    }
 
+        return if (isProperty) {
+            val q = """
+            PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+            PREFIX owl: <http://www.w3.org/2002/07/owl#>
+            PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 
-    //Query Update
-    @GetMapping("/queryReload")
-    fun queryReload(model: Model): String {
-        logger.info("User Request /reloadQuery")
-        ontQ.reloadQuery()
-        model.addAttribute("message", "Finish : reloadQuery")
-        return "index"
+            SELECT ?property ?value WHERE {
+                {
+                    <$resourceURI> rdfs:domain ?domainClass.
+                    ?domainClass owl:unionOf ?classList.
+                    ?classList rdf:rest*/rdf:first ?value.
+                    BIND (rdfs:domain AS ?property)
+                }
+                UNION
+                {
+                    <$resourceURI> rdfs:range ?value.
+                    BIND (rdfs:range AS ?property)
+                }
+                UNION
+                {
+                    <$resourceURI> owl:restriction ?value.
+                    BIND (owl:restriction AS ?property)
+                }
+            }
+        """.trimIndent()
+
+            val startTime = System.currentTimeMillis()
+            val propertyDetails = if (useTDB) {
+                val dataset = TDB2Factory.connectDataset("./_TDB")
+                ontQ.browseQuery(q, dataset)
+            } else {
+                ontQ.browseQuery(q)
+            }
+            val endTime = System.currentTimeMillis()
+
+            model.addAttribute("executionTime", endTime - startTime)
+            model.addAttribute("propertyDetails", propertyDetails)
+            "browseProperty"
+        } else {
+            // 🔥 일반 리소스 탐색 처리
+            val q1 = """
+            SELECT ?property ?value WHERE {
+                <$resourceURI> ?property ?value.
+            }   
+        """.trimIndent()
+            val startTime0 = System.currentTimeMillis()
+            val resourceInfo = if (useTDB) {
+                val dataset = TDB2Factory.connectDataset("./_TDB")
+                ontQ.browseQuery(q1, dataset)
+            } else {
+                ontQ.browseQuery(q1)
+            }
+            val endTime0 = System.currentTimeMillis()
+
+            val q2 = """
+            SELECT ?property ?value WHERE {
+                ?value ?property <$resourceURI>.
+            }
+        """.trimIndent()
+            val startTime1 = System.currentTimeMillis()
+            val resourceInfoReverse = if (useTDB) {
+                val dataset = TDB2Factory.connectDataset("./_TDB")
+                ontQ.browseQuery(q2, dataset)
+            } else {
+                ontQ.browseQuery(q2)
+            }
+            val endTime1 = System.currentTimeMillis()
+
+            model.addAttribute("executionTime0", endTime0 - startTime0)
+            model.addAttribute("resourceInfo", resourceInfo)
+            model.addAttribute("executionTime1", endTime1 - startTime1)
+            model.addAttribute("resourceInfoReverse", resourceInfoReverse)
+
+            "browse"
+        }
     }
 
 
@@ -172,32 +194,25 @@ class WebController : AutoCloseable {
     }
 
 
-    @PostMapping("/queryRun")
     @ResponseBody
-    fun queryRun(@RequestBody request: SparqlRequest): ResponseEntity<ApiResponse<Any>> {
+    @PostMapping("/queryRun")
+    fun queryRun(@RequestBody request: SparqlRequest): ResponseEntity<ApiResponse<MutableList<List<String>>>> {
         logger.info("User Request /queryRun")
-        return try {
-            val (executionTime, result) = ontQ.qRun(normalizeQuery(request.query))
-            val status = if (result.isEmpty()) "ok (no result or update)" else "ok"
-            ResponseEntity.ok(
-                ApiResponse(
-                    status = status,
-                    executionTimeMs = executionTime,
-                    data = result
-                )
-            )
-        } catch (e: Exception) {
-            ResponseEntity
-                .badRequest()
-                .body(
-                    ApiResponse(
-                        status = "error: ${e.message}",
-                        executionTimeMs = 0,
-                        data = null
-                    )
-                )
+
+        val useTDB = OntologyProperties.useTDB
+        val (executionTime, result) = if (useTDB) {
+            val dataset = TDB2Factory.connectDataset("./_TDB")
+            ontQ.qRun(normalizeQuery(request.query), dataset)
+        } else {
+            ontQ.qRun(normalizeQuery(request.query))
         }
+
+        val status = if (result.isEmpty()) "ok (no result or update)" else "ok"
+        val response = ApiResponse(status, executionTime, result)
+
+        return ResponseEntity.ok(response)
     }
+
 
 
 //=====================================================================================================
@@ -398,6 +413,7 @@ class WebController : AutoCloseable {
                 logger.info("Read RDF => ${pDir}/${file.name}")
                 try {
                     ont.read(file.absolutePath)
+                    print(file.absolutePath)
                     successCount++
                     file.delete()
                     // 파일 삭제

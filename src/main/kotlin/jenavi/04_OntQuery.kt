@@ -16,6 +16,7 @@ import org.apache.jena.query.ResultSetFormatter
 //--------------------------------------------------------------------
 import org.apache.jena.query.ARQ
 import org.apache.jena.sparql.util.Context
+import org.apache.jena.query.ReadWrite
 
 //--------------------------------------------------------------------
 import java.io.File
@@ -26,7 +27,7 @@ class OntQuery(val ont: OntModel, val cache: Boolean) {
     private val queries: MutableMap<String, String> = mutableMapOf()
 
     init {
-        reloadQuery()
+
     }
 
     companion object {
@@ -37,25 +38,6 @@ class OntQuery(val ont: OntModel, val cache: Boolean) {
         val gitURI = "https://github.com/BonhyeonGu/STA_Plugin/"
         val dtomURI = "http://paper.9bon.org/ontologies/dtom/1.0#"
         val LOCALE_JSON_QUERIES = "./_Queries"
-    }
-    
-    fun reloadQuery() {
-        val folder = File(LOCALE_JSON_QUERIES)
-        if (folder.exists() && folder.isDirectory) {
-            val files = folder.listFiles()
-
-            files?.forEach { file ->
-                if (file.isFile) {
-                    val content = file.readText()
-                    queries[file.name.split(".")[0]] = content
-                    logger.info("Query Name: ${file.name.split(".")[0]}")
-                }
-            }
-
-        } else {
-            logger.error("Can't found Qeuries")
-        }
-        logger.info("")
     }
 
 
@@ -93,15 +75,60 @@ class OntQuery(val ont: OntModel, val cache: Boolean) {
         return UpdateExecutionFactory.create(updateRequest, dataset, context)
     }
 
+    fun browseQuery(q: String, dataset: Dataset): List<Array<String>> {
+        logger.info("Browse => $q")
+
+        dataset.begin(ReadWrite.READ)
+        return try {
+            val model = dataset.defaultModel
+            val query = QueryFactory.create(q)
+            val qexec = QueryExecutionFactory.create(query, model)
+
+            val resultsList = mutableListOf<Array<String>>()
+            val results = qexec.execSelect()
+
+            while (results.hasNext()) {
+                val soln = results.nextSolution()
+                val property = soln.getResource("property").toString()
+                val text: String
+                val link: String
+                if (soln.get("value").isResource) {
+                    text = soln.getResource("value").toString()
+                    link = enShort(soln.getResource("value").toString())
+                } else {
+                    text = soln.getLiteral("value").toString()
+                    link = "x"
+                }
+                resultsList.add(arrayOf(property, text, link, ""))  // 4번째 컬럼 채워서 반환
+            }
+
+            val sortedResourceInfo = resultsList.sortedWith(
+                compareBy({ if (it[2] == "x") 0 else 1 }, { it[0] }, { it[1] })
+            ).toMutableList()
+
+            for (i in sortedResourceInfo.indices) {
+                val currentEntry = sortedResourceInfo[i]
+                val nextEntries = sortedResourceInfo.subList(i, sortedResourceInfo.size)
+                val rowspan = nextEntries.takeWhile { it[0] == currentEntry[0] }.size
+                currentEntry[3] = rowspan.toString()
+            }
+
+            dataset.commit()
+            sortedResourceInfo
+        } finally {
+            dataset.end()
+        }
+    }
+
     fun browseQuery(q: String): List<Array<String>> {
-        logger.info("Browse => ${q}")
+        logger.info("Browse => $q")
 
         val query = QueryFactory.create(q)
         val qexec = QueryExecutionFactory.create(query, ont)
-    
-        var resultsList = mutableListOf<Array<String>>()
+
+        val resultsList = mutableListOf<Array<String>>()
         val results = qexec.execSelect()
-    
+
         while (results.hasNext()) {
             val soln = results.nextSolution()
             val property = soln.getResource("property").toString()
@@ -114,19 +141,13 @@ class OntQuery(val ont: OntModel, val cache: Boolean) {
                 text = soln.getLiteral("value").toString()
                 link = "x"
             }
-            resultsList.add(arrayOf(property, text, link))
+            resultsList.add(arrayOf(property, text, link, ""))
         }
 
-        val extendedResourceInfo = resultsList.map { entry -> 
-            entry.toList() + "" // 리스트로 변환 후 추가
-        }.map { // 다시 배열로 변환
-            it.toTypedArray()
-        }.toMutableList()
-        
-        val sortedResourceInfo = extendedResourceInfo.sortedWith(
+        val sortedResourceInfo = resultsList.sortedWith(
             compareBy({ if (it[2] == "x") 0 else 1 }, { it[0] }, { it[1] })
-        )
-    
+        ).toMutableList()
+
         for (i in sortedResourceInfo.indices) {
             val currentEntry = sortedResourceInfo[i]
             val nextEntries = sortedResourceInfo.subList(i, sortedResourceInfo.size)
@@ -136,7 +157,8 @@ class OntQuery(val ont: OntModel, val cache: Boolean) {
 
         return sortedResourceInfo
     }
-    
+
+
     fun executeSPARQL(queryString: String): List<Array<String>> {
         //val startTime = System.currentTimeMillis()
         val query = QueryFactory.create(queryString)
@@ -169,24 +191,52 @@ class OntQuery(val ont: OntModel, val cache: Boolean) {
         return resultsList
     }
 
+    fun isProperty(resourceURI: String, dataset: Dataset): Boolean {
+        val q = """
+        PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+        PREFIX owl: <http://www.w3.org/2002/07/owl#>
+        
+        ASK WHERE {
+            {<$resourceURI> a rdf:Property.}
+            UNION
+            {<$resourceURI> a owl:ObjectProperty.}
+            UNION
+            {<$resourceURI> a owl:DatatypeProperty.}
+        }
+    """.trimIndent()
+
+        dataset.begin(ReadWrite.READ)
+        return try {
+            val model = dataset.defaultModel
+            val query = QueryFactory.create(q)
+            val qexec = QueryExecutionFactory.create(query, model)
+            val result = qexec.execAsk()
+            dataset.commit()
+            result
+        } finally {
+            dataset.end()
+        }
+    }
+
     fun isProperty(resourceURI: String): Boolean {
         val q = """
-            PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-            PREFIX owl: <http://www.w3.org/2002/07/owl#>
-            
-            ASK WHERE {
-                {<$resourceURI> a rdf:Property.}
-                UNION
-                {<$resourceURI> a owl:ObjectProperty.}
-                UNION
-                {<$resourceURI> a owl:DatatypeProperty.}
-            }
-        """.trimIndent()
-    
+        PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+        PREFIX owl: <http://www.w3.org/2002/07/owl#>
+        
+        ASK WHERE {
+            {<$resourceURI> a rdf:Property.}
+            UNION
+            {<$resourceURI> a owl:ObjectProperty.}
+            UNION
+            {<$resourceURI> a owl:DatatypeProperty.}
+        }
+    """.trimIndent()
+
         val query = QueryFactory.create(q)
         val qexec = QueryExecutionFactory.create(query, ont)
         return qexec.execAsk()
     }
+
 
 //=============================================================================================
 
@@ -531,6 +581,17 @@ class OntQuery(val ont: OntModel, val cache: Boolean) {
         return match?.groupValues?.get(1)?.lowercase() ?: "unknown"
     }
 
+    fun qRun(queryStr: String, dataset: Dataset): Pair<Long, MutableList<List<String>>> {
+        return when (val queryType = detectQueryType(queryStr)) {
+            "select", "ask", "describe", "construct" -> qSelect(queryStr, dataset)
+            "insert", "delete", "load", "create", "drop", "add", "move", "copy", "clear", "with" -> {
+                val time = qUpdate(queryStr, dataset)
+                Pair(time, mutableListOf())
+            }
+            else -> throw IllegalArgumentException("Unsupported or unrecognized SPARQL query type: $queryType")
+        }
+    }
+
     fun qRun(queryStr: String): Pair<Long, MutableList<List<String>>> {
         return when (val queryType = detectQueryType(queryStr)) {
             "select", "ask", "describe", "construct" -> qSelect(queryStr)
@@ -542,7 +603,63 @@ class OntQuery(val ont: OntModel, val cache: Boolean) {
         }
     }
 
-    
+
+
+
+    private fun qSelect(queryStr: String, dataset: Dataset): Pair<Long, MutableList<List<String>>> {
+        dataset.begin(ReadWrite.READ)
+        return try {
+            val query = QueryFactory.create(queryStr)
+            val qexec = QueryExecutionFactory.create(query, dataset.defaultModel)
+
+            val startTime = System.currentTimeMillis()
+            val resSet = qexec.execSelect()
+            val endTime = System.currentTimeMillis()
+
+            val exeTime = endTime - startTime
+            val resList: MutableList<List<String>> = mutableListOf()
+
+            val resultVars = resSet.resultVars
+            while (resSet.hasNext()) {
+                val qs = resSet.nextSolution()
+                val row = mutableListOf<String>()
+                for (varName in resultVars) {
+                    val node = qs.get(varName)
+                    val value = when {
+                        node == null -> "null"
+                        node.isLiteral -> node.asLiteral().value.toString()
+                        node.isResource -> node.asResource().uri ?: node.asResource().toString()
+                        else -> node.toString()
+                    }
+                    row.add(value)
+                }
+                resList.add(row)
+            }
+
+            qexec.close()
+            dataset.commit()
+            Pair(exeTime, resList)
+        } finally {
+            dataset.end()
+        }
+    }
+
+
+    private fun qUpdate(queryStr: String, dataset: Dataset): Long {
+        dataset.begin(ReadWrite.WRITE)
+        return try {
+            val startTime = System.currentTimeMillis()
+            val updateRequest = UpdateFactory.create(queryStr)
+            UpdateAction.execute(updateRequest, dataset.defaultModel)
+            val endTime = System.currentTimeMillis()
+
+            dataset.commit()  // 반드시 commit 해야 실제로 반영됨!
+            endTime - startTime
+        } finally {
+            dataset.end()
+        }
+    }
+
     private fun qSelect(queryStr: String): Pair<Long, MutableList<List<String>>> {
         val query = QueryFactory.create(queryStr)
         val qexec = QueryExecutionFactory.create(query, ont)
@@ -554,14 +671,10 @@ class OntQuery(val ont: OntModel, val cache: Boolean) {
         val exeTime = endTime - startTime
         val resList: MutableList<List<String>> = mutableListOf()
 
-        // 컬럼 이름을 가져오기
         val resultVars = resSet.resultVars
-
         while (resSet.hasNext()) {
             val qs = resSet.nextSolution()
             val row = mutableListOf<String>()
-
-            // 각 컬럼 변수명에 대해 결과 가져오기
             for (varName in resultVars) {
                 val node = qs.get(varName)
                 val value = when {
@@ -572,7 +685,6 @@ class OntQuery(val ont: OntModel, val cache: Boolean) {
                 }
                 row.add(value)
             }
-
             resList.add(row)
         }
 
@@ -580,16 +692,14 @@ class OntQuery(val ont: OntModel, val cache: Boolean) {
         return Pair(exeTime, resList)
     }
 
-
     private fun qUpdate(queryStr: String): Long {
         val startTime = System.currentTimeMillis()
-
         val updateRequest = UpdateFactory.create(queryStr)
-        UpdateAction.execute(updateRequest, ont)  // `ont`는 Dataset 또는 Model
-
+        UpdateAction.execute(updateRequest, ont)  // `ont`는 온메모리 OntModel
         val endTime = System.currentTimeMillis()
         return endTime - startTime
     }
+
 
 //=============================================================================================
 

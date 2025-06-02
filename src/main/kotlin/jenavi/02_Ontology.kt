@@ -1,23 +1,21 @@
 package jenavi
 
-//--------------------------------------------------------------------
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
-//--------------------------------------------------------------------
 import org.apache.jena.ontology.OntModel
 import org.apache.jena.ontology.OntModelSpec
 import org.apache.jena.ontology.OntDocumentManager
-//--------------------------------------------------------------------
+import org.apache.jena.query.Dataset
+import org.apache.jena.query.ReadWrite
 import org.apache.jena.rdf.model.ModelFactory
-//import org.apache.jena.tdb.TDBFactory // 온메모리를 하지 않을 때 고려되어야 함
-//--------------------------------------------------------------------
 import org.apache.jena.riot.RiotException
-import org.apache.jena.vocabulary.RDF//통계에서
+import org.apache.jena.tdb2.TDB2Factory
+import org.apache.jena.vocabulary.RDF
 import org.apache.jena.rdf.model.RDFNode
-//--------------------------------------------------------------------
-import java.io.File // RDF 읽을 때 사용
+import java.io.File
 
-class Ontology(val rule: OntModelSpec) {
+class Ontology(private val model: OntModel) {
+
     companion object {
         private val logger: Logger = LoggerFactory.getLogger(Ontology::class.java)
         const val PATH_DIR_RDF = "./_RDF"
@@ -27,62 +25,89 @@ class Ontology(val rule: OntModelSpec) {
             //"http://paper.9bon.org/ontologies/smartcity/0.2",
             "http://paper.9bon.org/ontologies/dtom/1.0"
         )
+
+        fun createOntology(useTDB: Boolean): Ontology {
+            val ontDocMgr = OntDocumentManager().apply {
+                setReadFailureHandler { uri, _, e ->
+                    logger.error("Read Fail, URI => $uri, ${e.message}")
+                }
+            }
+
+            val ontModelSpec = OntModelSpec(OntModelSpec.OWL_MEM_TRANS_INF).apply {
+                documentManager = ontDocMgr
+            }
+
+            if (useTDB) {
+                val dataset: Dataset = TDB2Factory.connectDataset("./_TDB")
+                var ontology: Ontology
+
+                // WRITE 트랜잭션에서 온톨로지 초기화
+                dataset.begin(ReadWrite.WRITE)
+                try {
+                    val tdbModel = ModelFactory.createOntologyModel(ontModelSpec, dataset.defaultModel)
+                    ontology = Ontology(tdbModel)
+                    ontology.loadOntologies() // 여기서 트랜잭션 안에서 read() 실행
+                    dataset.commit()
+                } finally {
+                    dataset.end()
+                }
+
+                // READ 모드로 실제 서비스에서 사용할 모델 열기
+                dataset.begin(ReadWrite.READ)
+                try {
+                    val tdbModel = ModelFactory.createOntologyModel(ontModelSpec, dataset.defaultModel)
+                    ontology = Ontology(tdbModel)
+                } finally {
+                    dataset.end()
+                }
+
+                return ontology
+            } else {
+                val memModel = ModelFactory.createOntologyModel(ontModelSpec)
+                val ontology = Ontology(memModel)
+                ontology.loadOntologies() // 온메모리라면 트랜잭션 필요 없음
+                return ontology
+            }
+        }
     }
 
     private val readStatusMap: MutableMap<String, Boolean> = mutableMapOf()
 
-    //메니저 생성
-    private val ontDocMgr = OntDocumentManager().apply {
-        //setProcessImports(false)
-        setReadFailureHandler { uri, model, e ->
-            logger.error("Read Fail, URI => $uri, Handle => OntManager, ${e.message}")
-            readStatusMap[uri] = false
-        }
-    }
+    val ontologyModel: OntModel
+        get() = model
 
-    //온톨로지 모델의 메니저 및 룰 정의
-    private val ontModelSpec = OntModelSpec(rule).apply {
-        documentManager = ontDocMgr
-    }
-    
-    val ontologyModel: OntModel = ModelFactory.createOntologyModel(ontModelSpec)
-
-    init {
-        // 작성한 OWL들을 불러옴
+    // 🟢 이제는 외부에서 트랜잭션으로 감싸서 호출되도록 한다
+    fun loadOntologies() {
         PATH_DIR_OWLS.forEach { url ->
             logger.info("Try read URL => $url")
             readStatusMap[url] = true
             try {
                 val file = File(url)
                 val cleanFile = if (file.exists()) removeBOM(file) else file
-    
-                ontologyModel.read(cleanFile.toURI().toString(), "text/turtle")
+                model.read(cleanFile.toURI().toString(), "text/turtle")
                 logger.info("Read Complete, Type => Turtle")
             } catch (e: Exception) {
                 try {
-                    ontologyModel.read(url, "application/rdf+xml")
+                    model.read(url, "application/rdf+xml")
                     logger.info("Read Complete, Type => RDF/XML")
                 } catch (e: Exception) {
-                    logger.error("Read Fail, URI => $url, Handle => OntManager, ${e.message}")
+                    logger.error("Read Fail, URI => $url, ${e.message}")
                     readStatusMap[url] = false
                 }
             }
         }
 
-        //!!!!OWL과 RDF를 읽는 방법이 다른지 추가적인 조사가 필요하다.!!!!
         readRDF(PATH_DIR_OWL)
         readRDF(PATH_DIR_RDF)
         calcStatistics()
-        logger.info("")
+
         logger.info("")
         logger.info("Successfully read the following URLs without errors:")
-        // 에러 없는 OWL, RDF 리스트
         readStatusMap.forEach { (url, success) ->
             if (success) {
                 logger.info(url)
             }
         }
-        logger.info("")
         logger.info("")
     }
 
@@ -91,15 +116,15 @@ class Ontology(val rule: OntModelSpec) {
         if (directory.exists() && directory.isDirectory) {
             val files = directory.listFiles()
             files?.forEach { file ->
-                logger.info("Read RDF => ${PATH_DIR_RDF}/${file.name}")
+                logger.info("Read RDF => ${file.absolutePath}")
                 try {
-                    ontologyModel.read(file.absolutePath)
+                    model.read(file.absolutePath)
                 } catch (e: RiotException) {
-                    logger.error("RiotException => ${PATH_DIR_RDF}/${file.name}")
+                    logger.error("RiotException => ${file.name}")
                 }
             }
         } else {
-            logger.error("The provided path is not a valid directory.")
+            logger.error("The provided path is not a valid directory: $locale")
         }
     }
 
@@ -108,7 +133,7 @@ class Ontology(val rule: OntModelSpec) {
         val classWithInstances = mutableSetOf<String>()
         var totalInstances = 0
 
-        val statements = ontologyModel.listStatements(null, RDF.type, null as RDFNode?)
+        val statements = model.listStatements(null, RDF.type, null as RDFNode?)
         while (statements.hasNext()) {
             val stmt = statements.nextStatement()
             val obj = stmt.`object`
@@ -122,8 +147,7 @@ class Ontology(val rule: OntModelSpec) {
             }
         }
 
-        // 정의된 클래스 추출
-        val definedClasses = ontologyModel.listClasses()
+        val definedClasses = model.listClasses()
             .toList()
             .mapNotNull { it.uri }
             .toSet()
@@ -143,12 +167,12 @@ class Ontology(val rule: OntModelSpec) {
     }
 
     private fun removeBOM(file: File): File {
-        val tempFile = File.createTempFile("cleaned_", ".ttl") // 임시 파일 생성
+        val tempFile = File.createTempFile("cleaned_", ".ttl")
         val reader = file.inputStream().reader(Charsets.UTF_8)
         val content = reader.readText()
         reader.close()
-    
-        tempFile.writeText(content, Charsets.UTF_8) // BOM 제거 후 저장
+
+        tempFile.writeText(content, Charsets.UTF_8)
         logger.info("BOM 제거 완료: ${file.name}")
         return tempFile
     }
