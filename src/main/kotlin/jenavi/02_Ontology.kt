@@ -158,7 +158,7 @@ class Ontology(private val model: OntModel) {
         val classRichness = if (totalClassCount > 0) classWithInstanceCount.toDouble() / totalClassCount else 0.0
         val averagePopulation = if (totalClassCount > 0) totalInstances.toDouble() / totalClassCount else 0.0
 
-        logger.info("📊 온톨로지 통계 요약:")
+        logger.info("--온톨로지 통계 요약--")
         logger.info("전체 클래스 수 (정의된 owl:Class): $totalClassCount")
         logger.info("인스턴스가 존재하는 클래스 수: $classWithInstanceCount")
         logger.info("전체 인스턴스 수 (rdf:type 포함): $totalInstances")

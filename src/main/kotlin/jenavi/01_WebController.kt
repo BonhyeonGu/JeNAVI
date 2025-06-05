@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.ResponseBody // 문자열을 렌더링 없이 간단한 방법으로 출력
 import org.springframework.web.bind.annotation.RequestBody
+import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.http.ResponseEntity
 //--------------------------------------------------------------------
 import org.apache.jena.ontology.OntModelSpec // RULE
@@ -185,6 +186,14 @@ class WebController(
         return "queryForm"
     }
 
+    @PostMapping("/executeQuery")
+    fun executeQuery(@RequestParam sparqlQuery: String, model: Model): String {
+        val resultsList = ontQ.executeSPARQL(sparqlQuery)
+        model.addAttribute("results", resultsList)
+        return "queryResults"
+    }
+
+    //API로 질의문 받았을 때 좀 문제가 발생하는 듯
     fun normalizeQuery(query: String): String {
         return query
             .lines()
@@ -198,6 +207,7 @@ class WebController(
     @PostMapping("/queryRun")
     fun queryRun(@RequestBody request: SparqlRequest): ResponseEntity<ApiResponse<MutableList<List<String>>>> {
         logger.info("User Request /queryRun")
+        //logger.info(request.toString())
 
         val useTDB = OntologyProperties.useTDB
         val (executionTime, result) = if (useTDB) {
@@ -209,7 +219,7 @@ class WebController(
 
         val status = if (result.isEmpty()) "ok (no result or update)" else "ok"
         val response = ApiResponse(status, executionTime, result)
-
+        //logger.info(response.toString())
         return ResponseEntity.ok(response)
     }
 

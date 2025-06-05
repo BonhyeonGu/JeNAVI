@@ -1,6 +1,6 @@
 <div align="center">
 
-<h1>JenaController</h1>
+<h1>Jenavi</h1>
 KBMS supporting web API-based queries and commands<br/><br/>
 
 <picture><img src="https://img.shields.io/badge/-Kotlin-7F52FF?style=flat-square&logo=kotlin&logoColor=FFFFFF" alt="..."></picture>
@@ -11,7 +11,7 @@ KBMS supporting web API-based queries and commands<br/><br/>
 
 ## Acknowledgment
 
-This repository is intended solely for development purposes and not for deployment. The deployment repository is managed under the authority of the [DT-DL Lab]() at Dong-A University.
+This repository is intended solely for development purposes and not for deployment. The deployment repository is managed under the authority of the [DT-DL Lab](https://aidtlab-dau.github.io/) at Dong-A University.
 
 ## Demo
 
