@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.ResponseBody // 문자열을 렌더링 없이 간단한 방법으로 출력
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestParam
+import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 //--------------------------------------------------------------------
 import org.apache.jena.ontology.OntModelSpec // RULE
@@ -31,9 +32,14 @@ import javax.xml.transform.stream.StreamResult
 
 import jenavi.config.OntologyProperties
 import java.io.FileInputStream
+import org.springframework.web.bind.annotation.*
+import org.springframework.web.multipart.MultipartFile
 
 import org.apache.jena.tdb2.TDB2Factory
+import org.apache.jena.query.ReadWrite
 
+
+//응답 포맷
 data class ApiResponse<T>(
     val status: String,
     val executionTimeMs: Long,
@@ -202,7 +208,31 @@ class WebController(
             .trim()
     }
 
+    @CrossOrigin(origins = ["*"])
+    @PostMapping("/init")
+    @ResponseBody
+    fun initOntology(): ResponseEntity<ApiResponse<String>> {
+        logger.info("User Request /init : Reinitializing ontology")
+        val start = System.currentTimeMillis()
 
+        return try {
+            val useTDB = OntologyProperties.useTDB
+            val newOntology = Ontology.createOntology(useTDB)
+            ont = newOntology.ontologyModel
+            ontQ = OntQuery(ont, cache = false)
+
+            val end = System.currentTimeMillis()
+            val response = ApiResponse("ok", end - start, "Ontology reloaded with cache disabled.")
+            ResponseEntity.ok(response)
+        } catch (e: Exception) {
+            val end = System.currentTimeMillis()
+            val response = ApiResponse("error", end - start, e.message ?: "Unknown error")
+            ResponseEntity.ok(response)
+        }
+    }
+
+
+    @CrossOrigin(origins = ["*"])  // 또는 ["http://127.0.0.1:5010"]
     @ResponseBody
     @PostMapping("/queryRun")
     fun queryRun(@RequestBody request: SparqlRequest): ResponseEntity<ApiResponse<MutableList<List<String>>>> {
@@ -222,8 +252,6 @@ class WebController(
         //logger.info(response.toString())
         return ResponseEntity.ok(response)
     }
-
-
 
 //=====================================================================================================
 
@@ -453,8 +481,181 @@ class WebController(
         }
     }
 
+    @CrossOrigin(origins = ["*"])
+    @GetMapping("/FileUpdate")
+    @ResponseBody
+    fun fileUpdate(@RequestParam("dir") dir: String, @RequestParam("deleteAfter", defaultValue = "true") deleteAfter: Boolean): ResponseEntity<ApiResponse<Any>> {
+        logger.info("User Request /FileUpdate with dir=$dir deleteAfter=$deleteAfter")
+        val directory = File(dir)
 
-//=====================================================================================================
+        return if (directory.exists() && directory.isDirectory) {
+            val files = directory.listFiles()
+            var successCount = 0
+            var failureCount = 0
+            var totalParsingTime: Long = 0
+
+            val useTDB = OntologyProperties.useTDB
+
+            if (useTDB) {
+                val dataset = TDB2Factory.connectDataset("./_TDB")
+                dataset.begin(ReadWrite.WRITE)
+                try {
+                    val model = dataset.defaultModel
+                    files?.forEach { file ->
+                        try {
+                            FileInputStream(file).use { inputStream ->
+                                val parseStart = System.currentTimeMillis()
+                                model.read(inputStream, null, "RDF/XML")
+                                val parseEnd = System.currentTimeMillis()
+                                totalParsingTime += (parseEnd - parseStart)
+                            }
+                            successCount++
+                        } catch (e: RiotException) {
+                            logger.error("RiotException => ${dir}/${file.name}")
+                            failureCount++
+                        } catch (e: Exception) {
+                            logger.error("Unexpected exception => ${e.message}")
+                            failureCount++
+                        }
+                    }
+                    dataset.commit()
+                } catch (e: Exception) {
+                    logger.error("Transaction failed: ${e.message}")
+                    failureCount = files?.size ?: 0
+                } finally {
+                    dataset.end()
+                }
+            } else {
+                // 메모리 기반 모델
+                files?.forEach { file ->
+                    try {
+                        FileInputStream(file).use { inputStream ->
+                            val parseStart = System.currentTimeMillis()
+                            ont.read(inputStream, null, "RDF/XML")
+                            val parseEnd = System.currentTimeMillis()
+                            totalParsingTime += (parseEnd - parseStart)
+                        }
+                        successCount++
+                    } catch (e: RiotException) {
+                        logger.error("RiotException => ${dir}/${file.name}")
+                        failureCount++
+                    } catch (e: Exception) {
+                        logger.error("Unexpected exception => ${e.message}")
+                        failureCount++
+                    }
+                }
+            }
+
+            if (deleteAfter) {
+                files?.forEach { file -> file.delete() }
+                logger.info("Files deleted after RDF loading.")
+            }
+
+            logger.info("ont.read parsing only time: $totalParsingTime ms")
+
+            ResponseEntity.ok(
+                ApiResponse(
+                    status = "ok",
+                    executionTimeMs = totalParsingTime,
+                    data = mapOf(
+                        "successCount" to successCount,
+                        "failureCount" to failureCount
+                    )
+                )
+            )
+        } else {
+            logger.error("The provided path is not a valid directory.")
+            ResponseEntity.badRequest().body(
+                ApiResponse(
+                    status = "error",
+                    executionTimeMs = 0,
+                    data = mapOf("error" to "Invalid directory")
+                )
+            )
+        }
+    }
+
+    @CrossOrigin(origins = ["*"])
+    @PostMapping("/uploadRdf")
+    @ResponseBody
+    fun uploadRdf(@RequestParam files: List<MultipartFile>): ResponseEntity<ApiResponse<Any>> {
+        var successCount = 0
+        var failureCount = 0
+        var totalParsingTime: Long = 0
+
+        val useTDB = OntologyProperties.useTDB
+
+        if (useTDB) {
+            val dataset = TDB2Factory.connectDataset("./_TDB")
+            dataset.begin(ReadWrite.WRITE)
+            try {
+                val model = dataset.defaultModel
+                files.forEach { file ->
+                    if (!file.isEmpty && (file.originalFilename?.endsWith(".rdf") == true || file.originalFilename?.endsWith(".xml") == true)) {
+                        try {
+                            val start = System.currentTimeMillis()
+                            file.inputStream.use { input ->
+                                model.read(input, null, "RDF/XML")
+                            }
+                            totalParsingTime += System.currentTimeMillis() - start
+                            successCount++
+                        } catch (e: RiotException) {
+                            logger.error("RiotException in file: ${file.originalFilename}")
+                            failureCount++
+                        } catch (e: Exception) {
+                            logger.error("Exception in file: ${file.originalFilename}, ${e.message}")
+                            failureCount++
+                        }
+                    } else {
+                        logger.warn("Skipped file: ${file.originalFilename} (not .rdf/.xml)")
+                    }
+                }
+                dataset.commit()
+            } catch (e: Exception) {
+                logger.error("Dataset error: ${e.message}")
+                failureCount = files.size
+            } finally {
+                dataset.end()
+            }
+        } else {
+            // 메모리 기반 모델의 경우
+            files.forEach { file ->
+                if (!file.isEmpty && (file.originalFilename?.endsWith(".rdf") == true || file.originalFilename?.endsWith(".xml") == true)) {
+                    try {
+                        val start = System.currentTimeMillis()
+                        file.inputStream.use { input ->
+                            ont.read(input, null, "RDF/XML")
+                        }
+                        totalParsingTime += System.currentTimeMillis() - start
+                        successCount++
+                    } catch (e: RiotException) {
+                        logger.error("RiotException in file: ${file.originalFilename}")
+                        failureCount++
+                    } catch (e: Exception) {
+                        logger.error("Exception in file: ${file.originalFilename}, ${e.message}")
+                        failureCount++
+                    }
+                } else {
+                    logger.warn("Skipped file: ${file.originalFilename} (not .rdf/.xml)")
+                }
+            }
+        }
+
+        return ResponseEntity.ok(
+            ApiResponse(
+                status = "ok",
+                executionTimeMs = totalParsingTime,
+                data = mapOf(
+                    "successCount" to successCount,
+                    "failureCount" to failureCount,
+                    "totalFiles" to files.size
+                )
+            )
+        )
+    }
+
+
+//=Legacy==================================================================================================
 
     @GetMapping("/debugUpdate/{pName}")
     fun debugUpdate(@PathVariable pName: String, model: Model): String {
@@ -464,6 +665,60 @@ class WebController(
         model.addAttribute("message", "Execution time: $executionTime ms")
         return "index"
     }
+}
+
+//Kafka==================================================================================================
+
+@RestController
+@RequestMapping("/kafka")
+@CrossOrigin(origins = ["*"])
+class UpdateController(
+    private val kafkaRdfUpdater: KafkaRdfUpdater
+) {
+
+    @GetMapping("/start")
+    fun startKafka(): ResponseEntity<String> {
+        val brokers = OntologyProperties.brokers
+        val topic = OntologyProperties.topic
+        val useTDB = OntologyProperties.useTDB
+
+        kafkaRdfUpdater.startConsumer(brokers, topic, useTDB)
+        return ResponseEntity.ok("Kafka RDF 업데이트 시작됨")
+    }
+
+    @GetMapping("/stop")
+    fun stopKafka(): ResponseEntity<String> {
+        kafkaRdfUpdater.stopConsumer()
+        return ResponseEntity.ok("Kafka RDF 업데이트 중지됨")
+    }
+}
 
 
+
+@RestController
+@RequestMapping("/cleaner")
+@CrossOrigin(origins = ["*"])
+class CleanerController(
+    private val scheduler: ObservationCleanerScheduler
+) {
+
+    @GetMapping("/start")
+    fun startCleaning(): ResponseEntity<String> {
+        scheduler.start()
+        return ResponseEntity.ok("Observation 주기적 삭제 시작됨")
+    }
+
+    @GetMapping("/stop")
+    fun stopCleaning(): ResponseEntity<String> {
+        scheduler.stop()
+        return ResponseEntity.ok("Observation 주기적 삭제 중지됨")
+    }
+
+    @GetMapping("/status")
+    fun getStatus(): ResponseEntity<String> {
+        return if (scheduler.isRunning())
+            ResponseEntity.ok("삭제기 동작 중")
+        else
+            ResponseEntity.ok("삭제기 중지됨")
+    }
 }

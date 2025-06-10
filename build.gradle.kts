@@ -38,7 +38,7 @@ dependencies {
 
 	// Kotlin + Jackson 연동 모듈
 	implementation("com.fasterxml.jackson.module:jackson-module-kotlin")
-
+	implementation("org.apache.kafka:kafka-clients:3.7.0") // Kafka 클라이언트
 }
 
 tasks.withType<KotlinCompile> {
@@ -59,7 +59,7 @@ tasks.withType(JavaExec::class.java) {
 }
 
 tasks.register<JavaExec>("debug") {
-    mainClass.set("JenaController.ApplicationKt")
+    mainClass.set("Jenavi.ApplicationKt")
     classpath = sourceSets["main"].runtimeClasspath
     jvmArgs("-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=*:5005")
 }

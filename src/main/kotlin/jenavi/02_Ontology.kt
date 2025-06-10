@@ -38,6 +38,12 @@ class Ontology(private val model: OntModel) {
             }
 
             if (useTDB) {
+                val tdbDir = File("./_TDB")
+                if (tdbDir.exists()) {
+                    tdbDir.deleteRecursively()
+                    logger.warn("TDB directory './_TDB' deleted for reinitialization.")
+                }
+
                 val dataset: Dataset = TDB2Factory.connectDataset("./_TDB")
                 var ontology: Ontology
 
@@ -46,7 +52,7 @@ class Ontology(private val model: OntModel) {
                 try {
                     val tdbModel = ModelFactory.createOntologyModel(ontModelSpec, dataset.defaultModel)
                     ontology = Ontology(tdbModel)
-                    ontology.loadOntologies() // 여기서 트랜잭션 안에서 read() 실행
+                    ontology.loadOntologies() // 초기 로딩
                     dataset.commit()
                 } finally {
                     dataset.end()
@@ -65,10 +71,11 @@ class Ontology(private val model: OntModel) {
             } else {
                 val memModel = ModelFactory.createOntologyModel(ontModelSpec)
                 val ontology = Ontology(memModel)
-                ontology.loadOntologies() // 온메모리라면 트랜잭션 필요 없음
+                ontology.loadOntologies()
                 return ontology
             }
         }
+
     }
 
     private val readStatusMap: MutableMap<String, Boolean> = mutableMapOf()
