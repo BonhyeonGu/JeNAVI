@@ -1,0 +1,58 @@
+:root {
+  --bg: #0f1115;
+  --card: #161a22;
+  --text: #e5e7eb;
+  --muted: #a1a1aa;
+  --primary: #6ea8fe;
+  --primary-weak: rgba(110, 168, 254, 0.15);
+  --border: #2a2f3a;
+  --accent: #7dd3fc;
+}
+
+* { box-sizing: border-box; }
+html, body, #app { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+
+/* 레이아웃 */
+.layout { min-height: 100%; display: flex; flex-direction: column; }
+.topbar {
+  position: sticky; top: 0; z-index: 20;
+  background: linear-gradient(180deg, rgba(0,0,0,.35), rgba(0,0,0,0)), var(--card);
+  border-bottom: 1px solid var(--border);
+  padding: 10px 16px;
+}
+.nav { display: flex; gap: 8px; align-items: center; max-width: 1100px; margin: 0 auto; }
+.brand { margin-right: auto; font-weight: 700; letter-spacing: .2px; color: var(--text); }
+.link {
+  color: var(--muted); text-decoration: none; padding: 8px 12px; border-radius: 10px;
+  transition: background .15s ease, color .15s ease;
+}
+.link:hover { background: var(--primary-weak); color: var(--text); }
+.router-link-active.link { background: var(--primary-weak); color: var(--text); }
+
+/* 메인 컨테이너 */
+.main { flex: 1; max-width: 1100px; margin: 24px auto; padding: 0 16px; }
+
+/* 공통 UI */
+.input, textarea, select {
+  background: #0c0f14; color: var(--text);
+  border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px;
+}
+.btn {
+  background: var(--primary); color: #0b1020; border: 0; border-radius: 10px; padding: 10px 14px;
+  font-weight: 600; cursor: pointer;
+}
+.btn:disabled { opacity: .6; cursor: not-allowed; }
+.btn.ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
+.btn.ghost:hover { border-color: var(--accent); color: var(--accent); }
+
+.card {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 14px; padding: 14px; margin: 14px 0;
+}
+
+/* 표 */
+.table { width: 100%; border-collapse: collapse; background: var(--card); border-radius: 12px; overflow: hidden; }
+.table th, .table td { border-bottom: 1px solid var(--border); padding: 10px; vertical-align: top; word-break: break-all; }
+.table thead th { background: #12151c; color: var(--muted); text-align: left; }
+.table tr:last-child td { border-bottom: 0; }

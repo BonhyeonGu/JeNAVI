@@ -1,5 +1,8 @@
 package jenavi
 //--------------------------------------------------------------------
+import jenavi.contracts.QueryResult
+import jenavi.contracts.TimedResult
+//--------------------------------------------------------------------
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 //--------------------------------------------------------------------
@@ -14,14 +17,14 @@ import org.apache.jena.update.*
 //--------------------------------------------------------------------
 import org.apache.jena.query.ResultSetFormatter
 //--------------------------------------------------------------------
-import org.apache.jena.query.ARQ
-import org.apache.jena.sparql.util.Context
 import org.apache.jena.query.ReadWrite
 
 //--------------------------------------------------------------------
-import java.io.File
-//--------------------------------------------------------------------
 import kotlin.random.Random
+
+import org.apache.jena.system.Txn
+import org.apache.jena.rdf.model.Model
+
 
 class OntQuery(val ont: OntModel, val cache: Boolean) {
     private val queries: MutableMap<String, String> = mutableMapOf()
@@ -32,51 +35,10 @@ class OntQuery(val ont: OntModel, val cache: Boolean) {
 
     companion object {
         private val logger: Logger = LoggerFactory.getLogger(OntQuery::class.java)
-        val staURI = "http://paper.9bon.org/ontologies/sensorthings/1.1.3#"
-        val udURI = "https://github.com/BonhyeonGu/resources/"
-        val scURI = "http://paper.9bon.org/ontologies/smartcity/0.2#"
-        val gitURI = "https://github.com/BonhyeonGu/STA_Plugin/"
-        val dtomURI = "http://paper.9bon.org/ontologies/dtom/1.0#"
-        val LOCALE_JSON_QUERIES = "./_Queries"
-    }
-
-
-    fun enShort(inp: String): String {
-        return when {
-            inp.contains(staURI) -> inp.replace(staURI, "sta-").replace("/", "$$")
-            inp.contains(udURI) -> inp.replace(udURI, "ud-").replace("/", "$$").replace("#", "~~")
-            inp.contains(scURI) -> inp.replace(scURI, "tsc-").replace("/", "$$")
-            inp.contains(gitURI) -> inp.replace(gitURI, "git-").replace("/", "$$").replace("#", "~~")
-            inp.contains(dtomURI) -> inp.replace(dtomURI, "dtom-").replace("/", "$$").replace("#", "~~")
-            else -> inp
-        }
-    }
-    
-    fun deShort(inp: String): String {
-        return when {
-            inp.startsWith("sta-") -> inp.replace("sta-", staURI).replace("$$", "/")
-            inp.startsWith("ud-") -> inp.replace("ud-", udURI).replace("$$", "/").replace("~~", "#")
-            inp.startsWith("tsc-") -> inp.replace("tsc-", scURI).replace("$$", "/")
-            inp.startsWith("git-") -> inp.replace("git-", gitURI).replace("$$", "/").replace("~~", "#")
-            inp.startsWith("dtom-") -> inp.replace("dtom-", dtomURI).replace("$$", "/").replace("~~", "#")
-            else -> inp
-        }
-    }
-
-
-    fun createUpdateExecution(updateRequest: UpdateRequest, dataset: Dataset): UpdateProcessor {
-        val context = Context()
-        context.set(ARQ.symLogExec, true)  // 질의 실행 로깅 활성화
-        context.set(ARQ.enableExecutionTimeLogging, true)  // 실행 시간 로깅 활성화
-        context.set(ARQ.optFilterPlacement, false)  // 필터 배치 최적화 비활성화
-        context.set(ARQ.optimization, false)  // 전반적인 최적화 비활성화
-        context.set(ARQ.queryTimeout, 0)  // 질의 타임아웃 설정 (0은 무제한)
-
-        return UpdateExecutionFactory.create(updateRequest, dataset, context)
     }
 
     fun browseQuery(q: String, dataset: Dataset): List<Array<String>> {
-        logger.info("Browse => $q")
+        // logger.info("Browse => $q")
 
         dataset.begin(ReadWrite.READ)
         return try {
@@ -94,7 +56,7 @@ class OntQuery(val ont: OntModel, val cache: Boolean) {
                 val link: String
                 if (soln.get("value").isResource) {
                     text = soln.getResource("value").toString()
-                    link = enShort(soln.getResource("value").toString())
+                    link = soln.getResource("value").toString()
                 } else {
                     text = soln.getLiteral("value").toString()
                     link = "x"
@@ -121,7 +83,7 @@ class OntQuery(val ont: OntModel, val cache: Boolean) {
     }
 
     fun browseQuery(q: String): List<Array<String>> {
-        logger.info("Browse => $q")
+        // logger.info("Browse => $q")
 
         val query = QueryFactory.create(q)
         val qexec = QueryExecutionFactory.create(query, ont)
@@ -136,7 +98,7 @@ class OntQuery(val ont: OntModel, val cache: Boolean) {
             val link: String
             if (soln.get("value").isResource) {
                 text = soln.getResource("value").toString()
-                link = enShort(soln.getResource("value").toString())
+                link = soln.getResource("value").toString()
             } else {
                 text = soln.getLiteral("value").toString()
                 link = "x"
@@ -157,7 +119,6 @@ class OntQuery(val ont: OntModel, val cache: Boolean) {
 
         return sortedResourceInfo
     }
-
 
     fun executeSPARQL(queryString: String): List<Array<String>> {
         //val startTime = System.currentTimeMillis()
@@ -354,33 +315,6 @@ class OntQuery(val ont: OntModel, val cache: Boolean) {
 
     // Debug Tools
 
-    fun countArea(dataset: Dataset): List<String> {
-        val fetchAreasQueryString = """
-            PREFIX tsc: <http://paper.9bon.org/ontologies/smartcity/0.2#>
-            
-            SELECT ?area WHERE {
-                ?area a tsc:Area.
-            }
-        """.trimIndent()
-    
-        val query = QueryFactory.create(fetchAreasQueryString)
-        val qexec = QueryExecutionFactory.create(query, dataset)
-    
-        val areas = mutableListOf<String>()
-        try {
-            val results = qexec.execSelect()
-            while (results.hasNext()) {
-                val soln = results.nextSolution()
-                areas.add(soln.getResource("area").uri)
-            }
-        } catch (e: Exception) {
-            logger.debug("Failed to fetch areas: $e")
-        } finally {
-            qexec.close()
-        }
-        return areas
-    }
-
 
     fun fetchObservations(dataset: Dataset): List<Pair<String, String>> {
         val fetchObservationsQueryString = """
@@ -404,38 +338,6 @@ class OntQuery(val ont: OntModel, val cache: Boolean) {
                 val area = soln.getResource("area").uri
                 val obs = soln.getResource("obs").uri
                 observations.add(area to obs)
-            }
-        } catch (e: Exception) {
-            logger.debug("Failed to fetch observations: $e")
-        } finally {
-            qexec.close()
-        }
-        return observations
-    }
-
-
-    fun TESTfetchObservations(dataset: Dataset): List<Pair<String, String>> {
-        val fetchObservationsQueryString = """
-            PREFIX tsc: <http://paper.9bon.org/ontologies/smartcity/0.2#>
-            PREFIX sta: <http://paper.9bon.org/ontologies/sensorthings/1.1#>
-            
-            SELECT ?subject ?obs WHERE {
-                ?subject sta:hasThing ?thing.
-                ?thing sta:hasMultiDatastream/sta:hasObservation ?obs.
-            }
-        """.trimIndent()
-    
-        val query = QueryFactory.create(fetchObservationsQueryString)
-        val qexec = QueryExecutionFactory.create(query, dataset)
-    
-        val observations = mutableListOf<Pair<String, String>>()
-        try {
-            val results = qexec.execSelect()
-            while (results.hasNext()) {
-                val soln = results.nextSolution()
-                val subject = soln.getResource("subject").uri
-                val obs = soln.getResource("obs").uri
-                observations.add(subject to obs)
             }
         } catch (e: Exception) {
             logger.debug("Failed to fetch observations: $e")
@@ -508,7 +410,6 @@ class OntQuery(val ont: OntModel, val cache: Boolean) {
         return ret
     }
 
-    // Debug Random Update
 
     fun debugUpdateRand(pName: String): Long {
         logger.info("Q:debugUpdateRand : " + pName)
@@ -575,11 +476,201 @@ class OntQuery(val ont: OntModel, val cache: Boolean) {
 //=============================================================================================
     
     // Query
+
+
+    fun runSparql(queryStr: String, dataset: Dataset): TimedResult {
+        // 1) 먼저 질의로 파싱 시도
+        val q = try { QueryFactory.create(queryStr) } catch (_: Exception) { null }
+
+        if (q != null) {
+            return when {
+                q.isSelectType -> selectExec(queryStr, dataset)
+                q.isAskType    -> askExec(queryStr, dataset)
+                q.isConstructType -> constructExec(queryStr, dataset)
+                q.isDescribeType  -> describeExec(queryStr, dataset)
+                else -> throw IllegalArgumentException("Unsupported query form")
+            }
+        }
+
+        // 2) 안 되면 업데이트로 파싱
+        val upd = try { UpdateFactory.create(queryStr) } catch (_: Exception) { null }
+            ?: throw IllegalArgumentException("Unrecognized SPARQL string")
+
+        return updateExec(upd, dataset)
+    }
+
+    private fun selectExec(queryStr: String, dataset: Dataset): TimedResult {
+        return Txn.calculateRead(dataset) {
+            val query = QueryFactory.create(queryStr)
+            QueryExecutionFactory.create(query, dataset).use { qexec ->
+                val start = System.currentTimeMillis()
+                val rs = qexec.execSelect()
+                val vars = rs.resultVars
+                val rows = mutableListOf<List<String>>()
+                while (rs.hasNext()) {
+                    val qs = rs.nextSolution()
+                    rows += vars.map { v ->
+                        val n = qs.get(v)
+                        when {
+                            n == null -> "null"
+                            n.isLiteral -> {
+                                val lit = n.asLiteral()
+                                // 언어/데이터타입 유지 원하면 다음과 같이:
+                                // "${lit.lexicalForm}^^${lit.datatypeURI ?: ""}@${lit.language ?: ""}"
+                                lit.lexicalForm
+                            }
+                            n.isResource -> n.asResource().uri ?: n.asResource().toString() // bnode 대응
+                            else -> n.toString()
+                        }
+                    }
+                }
+                val end = System.currentTimeMillis()
+                TimedResult(end - start, QueryResult.Table(vars, rows))
+            }
+        }
+    }
+
+    private fun askExec(queryStr: String, dataset: Dataset): TimedResult {
+        return Txn.calculateRead(dataset) {
+            val query = QueryFactory.create(queryStr)
+            QueryExecutionFactory.create(query, dataset).use { qexec ->
+                val start = System.currentTimeMillis()
+                val b = qexec.execAsk()
+                val end = System.currentTimeMillis()
+                TimedResult(end - start, QueryResult.Bool(b))
+            }
+        }
+    }
+
+    private fun constructExec(queryStr: String, dataset: Dataset): TimedResult {
+        return Txn.calculateRead(dataset) {
+            val query = QueryFactory.create(queryStr)
+            QueryExecutionFactory.create(query, dataset).use { qexec ->
+                val start = System.currentTimeMillis()
+                val model: Model = qexec.execConstruct()
+                val end = System.currentTimeMillis()
+                TimedResult(end - start, QueryResult.Graph(model))
+            }
+        }
+    }
+
+    private fun describeExec(queryStr: String, dataset: Dataset): TimedResult {
+        return Txn.calculateRead(dataset) {
+            val query = QueryFactory.create(queryStr)
+            QueryExecutionFactory.create(query, dataset).use { qexec ->
+                val start = System.currentTimeMillis()
+                val model: Model = qexec.execDescribe()
+                val end = System.currentTimeMillis()
+                TimedResult(end - start, QueryResult.Graph(model))
+            }
+        }
+    }
+
+    private fun updateExec(updateRequest: UpdateRequest, dataset: Dataset): TimedResult {
+        val millis = Txn.calculateWrite(dataset) {
+            val start = System.currentTimeMillis()
+            // 중요: dataset 전체에 대해 실행
+            UpdateAction.execute(updateRequest, dataset)
+            val end = System.currentTimeMillis()
+            end - start
+        }
+        return TimedResult(millis, QueryResult.UpdateAck)
+    }
+
+    /** 온메모리 모델 보호용 락 (필요시 외부에서 주입 가능) */
+    private val modelLock = Any()
+
+    fun runSparql(queryStr: String, model: Model): TimedResult {
+        // 1) 질의 시도
+        val q = try { QueryFactory.create(queryStr) } catch (_: Exception) { null }
+        if (q != null) {
+            return when {
+                q.isSelectType    -> selectExecMem(queryStr, model)
+                q.isAskType       -> askExecMem(queryStr, model)
+                q.isConstructType -> constructExecMem(queryStr, model)
+                q.isDescribeType  -> describeExecMem(queryStr, model)
+                else -> throw IllegalArgumentException("Unsupported query form")
+            }
+        }
+
+        // 2) 업데이트 시도
+        val upd = try { UpdateFactory.create(queryStr) } catch (_: Exception) { null }
+            ?: throw IllegalArgumentException("Unrecognized SPARQL string")
+
+        return updateExecMem(upd, model)
+    }
+
+    private fun selectExecMem(queryStr: String, model: Model): TimedResult = synchronized(modelLock) {
+        val query = QueryFactory.create(queryStr)
+        QueryExecutionFactory.create(query, model).use { qexec ->
+            val start = System.currentTimeMillis()
+            val rs = qexec.execSelect()
+            val vars = rs.resultVars
+            val rows = mutableListOf<List<String>>()
+            while (rs.hasNext()) {
+                val qs = rs.nextSolution()
+                rows += vars.map { v ->
+                    val n = qs.get(v)
+                    when {
+                        n == null -> "null"
+                        n.isLiteral -> n.asLiteral().lexicalForm
+                        n.isResource -> n.asResource().uri ?: n.asResource().toString() // bnode 안전
+                        else -> n.toString()
+                    }
+                }
+            }
+            val end = System.currentTimeMillis()
+            TimedResult(end - start, QueryResult.Table(vars, rows))
+        }
+    }
+
+    private fun askExecMem(queryStr: String, model: Model): TimedResult = synchronized(modelLock) {
+        val query = QueryFactory.create(queryStr)
+        QueryExecutionFactory.create(query, model).use { qexec ->
+            val start = System.currentTimeMillis()
+            val b = qexec.execAsk()
+            val end = System.currentTimeMillis()
+            TimedResult(end - start, QueryResult.Bool(b))
+        }
+    }
+
+    private fun constructExecMem(queryStr: String, model: Model): TimedResult = synchronized(modelLock) {
+        val query = QueryFactory.create(queryStr)
+        QueryExecutionFactory.create(query, model).use { qexec ->
+            val start = System.currentTimeMillis()
+            val outModel = qexec.execConstruct()      // 결과 그래프
+            val end = System.currentTimeMillis()
+            TimedResult(end - start, QueryResult.Graph(outModel))
+        }
+    }
+
+    private fun describeExecMem(queryStr: String, model: Model): TimedResult = synchronized(modelLock) {
+        val query = QueryFactory.create(queryStr)
+        QueryExecutionFactory.create(query, model).use { qexec ->
+            val start = System.currentTimeMillis()
+            val outModel = qexec.execDescribe()       // 결과 그래프
+            val end = System.currentTimeMillis()
+            TimedResult(end - start, QueryResult.Graph(outModel))
+        }
+    }
+
+    /** 온메모리 모델에 대한 SPARQL Update */
+    private fun updateExecMem(updateRequest: UpdateRequest, model: Model): TimedResult = synchronized(modelLock) {
+        val start = System.currentTimeMillis()
+        UpdateAction.execute(updateRequest, model)     // Dataset이 아니라 Model!
+        val end = System.currentTimeMillis()
+        TimedResult(end - start, QueryResult.UpdateAck)
+    }
+
+
+
+
     fun detectQueryType(queryStr: String): String {
         val regex = Regex("(?i)^(?:\\s*prefix\\s+\\w*:\\s*<[^>]+>\\s*)*(\\w+)")
         val match = regex.find(queryStr)
         return match?.groupValues?.get(1)?.lowercase() ?: "unknown"
     }
+
 
     fun qRun(queryStr: String, dataset: Dataset): Pair<Long, MutableList<List<String>>> {
         return when (val queryType = detectQueryType(queryStr)) {
@@ -592,6 +683,7 @@ class OntQuery(val ont: OntModel, val cache: Boolean) {
         }
     }
 
+
     fun qRun(queryStr: String): Pair<Long, MutableList<List<String>>> {
         return when (val queryType = detectQueryType(queryStr)) {
             "select", "ask", "describe", "construct" -> qSelect(queryStr)
@@ -602,8 +694,6 @@ class OntQuery(val ont: OntModel, val cache: Boolean) {
             else -> throw IllegalArgumentException("Unsupported or unrecognized SPARQL query type: $queryType")
         }
     }
-
-
 
 
     private fun qSelect(queryStr: String, dataset: Dataset): Pair<Long, MutableList<List<String>>> {
@@ -644,6 +734,7 @@ class OntQuery(val ont: OntModel, val cache: Boolean) {
         }
     }
 
+
     private fun qUpdate(queryStr: String, dataset: Dataset): Long {
         dataset.begin(ReadWrite.WRITE)
         return try {
@@ -658,6 +749,7 @@ class OntQuery(val ont: OntModel, val cache: Boolean) {
             dataset.end()
         }
     }
+
 
     private fun qSelect(queryStr: String): Pair<Long, MutableList<List<String>>> {
         val query = QueryFactory.create(queryStr)
@@ -691,6 +783,7 @@ class OntQuery(val ont: OntModel, val cache: Boolean) {
         return Pair(exeTime, resList)
     }
 
+
     private fun qUpdate(queryStr: String): Long {
         val startTime = System.currentTimeMillis()
         val updateRequest = UpdateFactory.create(queryStr)
@@ -698,10 +791,6 @@ class OntQuery(val ont: OntModel, val cache: Boolean) {
         val endTime = System.currentTimeMillis()
         return endTime - startTime
     }
-
-
-//=============================================================================================
-
 
 
 //=============================================================================================

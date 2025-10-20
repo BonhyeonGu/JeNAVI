@@ -1,6 +1,5 @@
 package jenavi.config
 
-import jenavi.ObservationCleaner
 import jenavi.Ontology
 import org.apache.jena.ontology.OntModel
 import org.springframework.context.annotation.Bean
@@ -19,18 +18,4 @@ class OntologyConfig {
         return ontology.ontologyModel
     }
 
-    @Bean
-    fun observationCleaner(): ObservationCleaner {
-        val useTDB = OntologyProperties.useTDB
-        val datasetProvider: () -> Dataset = {
-            if (useTDB) TDB2Factory.connectDataset("./_TDB")
-            else DatasetFactory.createTxnMem()
-        }
-
-        return ObservationCleaner(
-            datasetProvider = datasetProvider,
-            namespace = "http://paper.9bon.org/ontologies/sensorthings/1.1.3#",
-            thresholdHours = OntologyProperties.thresholdHours
-        )
-    }
 }
