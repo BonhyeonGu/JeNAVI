@@ -30,3 +30,22 @@ export type BrowsePayload = {
   timeOutgoingMs?: number | null;
   timeIncomingMs?: number | null;
 };
+
+
+export type OntologyStats = {
+  totalClassCount: number;
+  classWithInstanceCount: number;
+  totalInstances: number;
+  classRichness: number;
+  averagePopulation: number;
+};
+
+export type StatusData = {
+  storage: 'TDB2' | 'in-memory';
+  tdbBytes: number;
+  uptimeMs: number;
+  heapUsedBytes: number;
+  heapCommittedBytes: number;
+  heapMaxBytes: number;
+  ontologyStats: OntologyStats;
+};

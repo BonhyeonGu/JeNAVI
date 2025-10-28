@@ -28,9 +28,38 @@ sealed class QueryResult {
 }
 data class TimedResult(val millis: Long, val result: QueryResult)
 
+// 분석
+data class OntologyStats(
+    val totalClassCount: Int,
+    val classWithInstanceCount: Int,
+    val totalInstances: Int,
+    val classRichness: Double,
+    val averagePopulation: Double
+)
+
+data class StatusDataDto(
+    val storage: String,               // "TDB2" | "in-memory"
+    val tdbBytes: Long,
+    val uptimeMs: Long,
+    val heapUsedBytes: Long,
+    val heapCommittedBytes: Long,
+    val heapMaxBytes: Long,
+    val ontologyStats: OntologyStats
+)
 
 
-// ----- /api/browse 전용 DTO -----
+// 파일 업로드
+data class OntologyLoadSummary(
+    val totalTried: Int,
+    val readAuto: Int,
+    val failed: Int,
+    val loadedIRIs: List<String>,
+    val failedIRIs: List<String>,
+    val elapsedMs: Long
+)
+
+
+// /api/browse 전용 DTO
 data class BrowseRequest(
     val uri: String
 )

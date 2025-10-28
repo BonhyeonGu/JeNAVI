@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onMounted } from 'vue'
+import { ref, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { browseApi } from '../api/endpoints'
 import type { ApiResponse, BrowsePayload, TripleRow } from '../api/types'
@@ -32,7 +32,9 @@ async function copyToClipboard(full: string) {
 }
 
 async function fetchBrowse(u: string) {
-  loading.value = true; err.value = null; res.value = null
+  loading.value = true
+  err.value = null
+  res.value = null
   try {
     res.value = await browseApi({ uri: u })
   } catch (e: any) {
@@ -44,7 +46,7 @@ async function fetchBrowse(u: string) {
 
 // 입력창에서 조회 클릭
 async function submit() {
-  // 히스토리에 남기기: /browser?uri=...
+  if (!uri.value) return
   router.push({ name: 'Browser', query: { uri: uri.value } })
 }
 
@@ -54,12 +56,15 @@ function openResource(u?: string | null) {
   router.push({ name: 'Browser', query: { uri: u } })
 }
 
-// 쿼리 파라미터 변화 감지 → fetch
+// ✅ 쿼리 파라미터 변화 감지 → 자동 fetch
 watch(
   () => route.query.uri,
   (q) => {
     const u = typeof q === 'string' ? q : ''
-    if (!u) { res.value = null; return }
+    if (!u) {
+      res.value = null
+      return
+    }
     uri.value = u
     fetchBrowse(u)
   },
@@ -122,7 +127,6 @@ const isUri = (s?: string | null) => !!s && /^https?:\/\//i.test(s)
               </td>
               <td>
                 <template v-if="isUri(r.value)">
-                  <!-- 실제 이동 대신 재브라우징 -->
                   <button type="button" class="alink asButton" @click.prevent="openResource(r.value)">
                     {{ shortName(r.value) }}
                   </button>
@@ -212,7 +216,6 @@ const isUri = (s?: string | null) => !!s && /^https?:\/\//i.test(s)
   </section>
 </template>
 
-
 <style scoped>
 .section {
   background: var(--surface);
@@ -287,9 +290,6 @@ tbody tr:hover { background: rgba(255,255,255,.03); }
 .alink:hover { text-decoration: underline; }
 
 .error { color: #ff8b8b; }
-
-.alink { color: var(--accent); text-decoration: none; }
-.alink:hover { text-decoration: underline; }
 
 .asButton {
   all: unset;

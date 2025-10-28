@@ -3,6 +3,8 @@ import type {
   ApiResponse,
   BrowsePayload,
   BrowseRequest,
+  OntologyStats,
+  StatusData,
 } from './types';
 
 const BASE = '/api'; // 모든 엔드포인트는 /api 하위
@@ -66,6 +68,12 @@ export async function initOntology(): Promise<ApiResponse<Record<string, string>
   const r = await fetch(`${BASE}/init`, { method: 'GET' });
   if (!r.ok) throw new Error(await r.text());
   return r.json();
+}
+
+export async function getStatus(): Promise<ApiResponse<StatusData>> {
+  const res = await fetch('/api/status', { method: 'GET' });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return await res.json();
 }
 
 // /api/vali (GET)

@@ -2,9 +2,8 @@ package jenavi
 //--------------------------------------------------------------------
 import jenavi.config.OntologyProperties
 import jenavi.contracts.*
+import org.springframework.http.MediaType
 //--------------------------------------------------------------------
-import org.apache.jena.rdf.model.Model as JenaModel
-import org.apache.jena.ontology.OntModel as JenaOntModel
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 //--------------------------------------------------------------------
@@ -25,124 +24,180 @@ import org.apache.jena.query.Dataset
 import java.io.File
 import java.io.FileInputStream
 //--------------------------------------------------------------------
-
+import java.lang.management.ManagementFactory
 
 @RestController
 @RequestMapping("/api")
 @CrossOrigin(origins = ["*"])
-class WebController(private var ont: JenaOntModel) {
+class WebController(private val ontology: Ontology) {
     private val logger: Logger = LoggerFactory.getLogger(WebController::class.java)
-    private var ontQ: OntQuery = OntQuery(ont, cache = false)
+
+    @Volatile
+    private var ontQ: OntQuery = OntQuery({ ontology.ontologyModel }, cache = true)
+
+
     // --- Health ---
     @GetMapping("/ping")
     fun ping(): ResponseEntity<ApiResponse<String>> =
         ResponseEntity.ok(ApiResponse("ok", 0, "pong"))
 
-    @GetMapping("/version")
-    fun version(): ResponseEntity<ApiResponse<Map<String, String>>> =
-        ResponseEntity.ok(
-            ApiResponse(
-                status = "ok",
-                timeMs = 0,
-                data = mapOf(
-                    "app" to "jenavi-api",
-                    "sparql" to "jena-arq",
-                    "storage" to (if (OntologyProperties.useTDB) "TDB2" else "in-memory")
-                )
+
+    // --- status ---
+    private fun computeOntologyStatsViaSparql(): OntologyStats {
+        val q = """
+        PREFIX rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+        PREFIX owl:  <http://www.w3.org/2002/07/owl#>
+        SELECT ?totalClassCount ?classWithInstanceCount ?totalInstances WHERE {
+          { SELECT (COUNT(DISTINCT ?cls) AS ?totalClassCount) WHERE {
+              {
+                { ?cls a owl:Class } UNION { ?cls a rdfs:Class } UNION
+                { ?cls rdfs:subClassOf ?x } UNION { ?x rdfs:subClassOf ?cls } UNION
+                { ?s rdf:type ?cls }
+              }
+              FILTER (isIRI(?cls) && ?cls NOT IN (owl:Thing, owl:Nothing))
+          } }
+          { SELECT (COUNT(DISTINCT ?c) AS ?classWithInstanceCount) WHERE {
+              ?s rdf:type ?c .
+              FILTER (isIRI(?c) && ?c NOT IN (owl:Thing, owl:Nothing))
+          } }
+          { SELECT (COUNT(*) AS ?totalInstances) WHERE {
+              ?s rdf:type ?c .
+              FILTER (isIRI(?c))
+          } }
+        }
+    """.trimIndent()
+
+        val timed = ontQ.runSparql(q)  // ← Dataset 없이 호출 (OntModel 경로)
+
+        val table = timed.result as? QueryResult.Table
+            ?: return OntologyStats(0,0,0,0.0,0.0)
+
+        if (table.rows.isEmpty()) return OntologyStats(0,0,0,0.0,0.0)
+
+        fun idxOf(v: String) = table.vars.indexOf(v).takeIf { it >= 0 } ?: -1
+        val iTotal   = idxOf("totalClassCount")
+        val iWithIns = idxOf("classWithInstanceCount")
+        val iInst    = idxOf("totalInstances")
+
+        val r = table.rows[0]
+        fun asInt(i: Int) = r.getOrNull(i)?.trim()?.toIntOrNull() ?: 0
+
+        val totalClassCount = asInt(iTotal)
+        val classWithInstanceCount = asInt(iWithIns)
+        val totalInstances = asInt(iInst)
+
+        val classRichness =
+            if (totalClassCount > 0) classWithInstanceCount.toDouble() / totalClassCount else 0.0
+        val averagePopulation =
+            if (totalClassCount > 0) totalInstances.toDouble() / totalClassCount else 0.0
+
+        return OntologyStats(
+            totalClassCount = totalClassCount,
+            classWithInstanceCount = classWithInstanceCount,
+            totalInstances = totalInstances,
+            classRichness = classRichness,
+            averagePopulation = averagePopulation
+        )
+    }
+
+    @GetMapping("/status", produces = [MediaType.APPLICATION_JSON_VALUE])
+    fun status(): ResponseEntity<ApiResponse<StatusDataDto>> {
+        val start = System.nanoTime()
+
+        val tdbBytes: Long = if (OntologyProperties.useTDB) {
+            runCatching { ontology.tdbDiskUsageBytes() }.getOrDefault(0L)
+        } else 0L
+
+        val uptimeMs: Long = ManagementFactory.getRuntimeMXBean().uptime
+
+        val rt = Runtime.getRuntime()
+        val heapCommitted: Long = rt.totalMemory()
+        val heapMax: Long       = rt.maxMemory()
+        val heapUsed: Long      = heapCommitted - rt.freeMemory()
+
+        val stats = computeOntologyStatsViaSparql()
+
+        val payload = StatusDataDto(
+            storage = if (OntologyProperties.useTDB) "TDB2" else "in-memory",
+            tdbBytes = tdbBytes,
+            uptimeMs = uptimeMs,
+            heapUsedBytes = heapUsed,
+            heapCommittedBytes = heapCommitted,
+            heapMaxBytes = heapMax,
+            ontologyStats = OntologyStats(
+                totalClassCount = stats.totalClassCount,
+                classWithInstanceCount = stats.classWithInstanceCount,
+                totalInstances = stats.totalInstances,
+                classRichness = stats.classRichness,
+                averagePopulation = stats.averagePopulation
             )
         )
 
+        val elapsedMs = (System.nanoTime() - start) / 1_000_000L
 
-    @CrossOrigin(origins = ["*"])
-    @GetMapping("/api/init")
-    fun init(): ResponseEntity<ApiResponse<Map<String, String>>> {
-        logger.info("User Request GET /api/init : Reinitializing ontology")
-        val t0 = System.currentTimeMillis()
-
-        return try {
-            val useTDB = OntologyProperties.useTDB
-            val newOntology = Ontology.createOntology(useTDB)   // 기존 팩토리 그대로 사용
-            synchronized(this) {
-                // ont, ontQ 교체 (동시 접근 대비)
-                this.ont = newOntology.ontologyModel
-                this.ontQ = OntQuery(this.ont, cache = false)
-            }
-            val dt = System.currentTimeMillis() - t0
-            val payload = mapOf(
-                "message" to "Ontology reloaded with cache disabled.",
-                "storage" to (if (useTDB) "TDB2" else "in-memory")
+        return ResponseEntity.ok(
+            ApiResponse(
+                status = "ok",
+                timeMs = elapsedMs,
+                data = payload
             )
-            ResponseEntity.ok(ApiResponse(status = "ok", timeMs = dt, data = payload))
-        } catch (e: Exception) {
-            logger.error("initOntologyApi error", e)
-            val dt = System.currentTimeMillis() - t0
-            ResponseEntity.status(500).body(
-                ApiResponse(status = "error", timeMs = dt, data = mapOf("message" to (e.message ?: "init failed")))
-            )
-        }
+        )
     }
 
 
-    @CrossOrigin(origins = ["*"])
-    @GetMapping("/api/vali")
-    fun vali(): ResponseEntity<ApiResponse<Map<String, String>>> {
-        logger.debug("User Request GET /api/test")
-        val t0 = System.currentTimeMillis()
-        return try {
-            // 기존 Validate 로직 유지
-            val vali = Validate(ont)
-            vali.validationTest_OWLandRDF()
+    // ------
 
-            val dt = System.currentTimeMillis() - t0
+
+    // 온톨로지 초기화, 그런데 ontQ를 새로 만드는 것은 시간에 포함하지 않음
+    @GetMapping("/init")
+    fun init(): ResponseEntity<ApiResponse<Map<String, String>>> {
+        logger.info("User Request GET /api/init : FULL reset")
+        return try {
+            val elapsed = ontology.fullResetAndReload()
+            ontQ = OntQuery({ ontology.ontologyModel }, cache = true)
             ResponseEntity.ok(
                 ApiResponse(
                     status = "ok",
-                    timeMs = dt,
-                    data = mapOf("message" to "Finish : test")
+                    timeMs = elapsed,
+                    data = mapOf(
+                        "message" to "ontology fully reset & reloaded",
+                        "storage" to (if (OntologyProperties.useTDB) "TDB2" else "in-memory"),
+                        "elapsedMs" to elapsed.toString()
+                    )
                 )
             )
         } catch (e: Exception) {
-            logger.error("testApi error", e)
-            val dt = System.currentTimeMillis() - t0
+            logger.error("Failed full reset", e)
             ResponseEntity.status(500).body(
-                ApiResponse(status = "error", timeMs = dt, data = mapOf("message" to (e.message ?: "validation error")))
+                ApiResponse(
+                    status = "error",
+                    timeMs = 0,
+                    data = mapOf("error" to (e.message ?: "unknown"))
+                )
             )
         }
     }
 
 
-
-    @CrossOrigin(origins = ["*"])
     @PostMapping("/query")
     fun query(@RequestBody request: SparqlRequest): ResponseEntity<ApiResponse<Any>> {
         val query = request.query.trim()
         logger.info("POST /api/queryRun : ${query.take(100).replace('\n', ' ')}")
 
         return try {
-            // ---- 핵심: TDB는 try/finally로 명시적 close ----
-            val timed: TimedResult =
-                if (OntologyProperties.useTDB) {
-                    var ds: Dataset? = null
-                    try {
-                        ds = TDB2Factory.connectDataset("./_TDB")
-                        ontQ.runSparql(query, ds)              // <- TimedResult 반환
-                    } finally {
-                        try { ds?.close() } catch (_: Exception) {}
-                    }
-                } else {
-                    ontQ.runSparql(query, ont)                 // <- Jena OntModel 경로
-                }
+            val timed: TimedResult = ontQ.runSparql(query)
 
             val body: ApiResponse<Any> = when (val r = timed.result) {
                 is QueryResult.Table -> ApiResponse("ok", timed.millis, TableDTO(r.vars, r.rows))
                 is QueryResult.Bool  -> ApiResponse("ok", timed.millis, BoolDTO(r.value))
                 is QueryResult.Graph -> {
                     val fmt = when ((request.graphFormat ?: "TURTLE").uppercase()) {
-                        "TURTLE", "TTL" -> RDFFormat.TURTLE_PRETTY
-                        "NTRIPLES", "NT" -> RDFFormat.NTRIPLES_UTF8
-                        "JSONLD", "JSON-LD" -> RDFFormat.JSONLD_PRETTY
+                        "TURTLE", "TTL"      -> RDFFormat.TURTLE_PRETTY
+                        "NTRIPLES", "NT"     -> RDFFormat.NTRIPLES_UTF8
+                        "JSONLD", "JSON-LD"  -> RDFFormat.JSONLD_PRETTY
                         "RDFXML", "RDF/XML", "XML" -> RDFFormat.RDFXML_PRETTY
-                        else -> RDFFormat.TURTLE_PRETTY
+                        else                 -> RDFFormat.TURTLE_PRETTY
                     }
                     val rdf = java.io.ByteArrayOutputStream().also {
                         RDFDataMgr.write(it, r.model, fmt)
@@ -162,12 +217,11 @@ class WebController(private var ont: JenaOntModel) {
         } catch (e: Exception) {
             logger.error("queryRun error", e)
             ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(
-                ApiResponse<Any>("error", 0, mapOf("message" to "Internal server error")))
+                ApiResponse<Any>("error", 0, mapOf("message" to "Internal server error"))
+            )
         }
     }
 
-
-    @CrossOrigin(origins = ["*"])
     @PostMapping("/browse")
     fun browse(@RequestBody req: BrowseRequest): ResponseEntity<ApiResponse<BrowsePayload>> {
         logger.info("User Request POST /api/browse")
@@ -182,7 +236,10 @@ class WebController(private var ont: JenaOntModel) {
                 ds = TDB2Factory.connectDataset("./_TDB")
                 ontQ.isProperty(resourceURI, ds)
             } finally {
-                try { ds?.close() } catch (_: Exception) {}
+                try {
+                    ds?.close()
+                } catch (_: Exception) {
+                }
             }
         } else {
             ontQ.isProperty(resourceURI)
@@ -231,7 +288,10 @@ class WebController(private var ont: JenaOntModel) {
                     ds = TDB2Factory.connectDataset("./_TDB")
                     ontQ.browseQuery(q, ds)   // List<Array<String>>
                 } finally {
-                    try { ds?.close() } catch (_: Exception) {}
+                    try {
+                        ds?.close()
+                    } catch (_: Exception) {
+                    }
                 }
             } else {
                 ontQ.browseQuery(q)
@@ -241,18 +301,18 @@ class WebController(private var ont: JenaOntModel) {
             val mapped: List<TripleRow> = rows.map { arr ->
                 TripleRow(
                     property = arr.getOrNull(0) ?: "",
-                    value    = arr.getOrNull(1) ?: "",
-                    link     = arr.getOrNull(2)?.takeUnless { it == "x" },
-                    rowspan  = arr.getOrNull(3)?.toIntOrNull() ?: 1
+                    value = arr.getOrNull(1) ?: "",
+                    link = arr.getOrNull(2)?.takeUnless { it == "x" },
+                    rowspan = arr.getOrNull(3)?.toIntOrNull() ?: 1
                 )
             }
 
             val payload = BrowsePayload(
-                resourceURI    = resourceURI,
-                isProperty     = true,
-                propertyDetails= mapped,
-                outgoing       = null,
-                incoming       = null,
+                resourceURI = resourceURI,
+                isProperty = true,
+                propertyDetails = mapped,
+                outgoing = null,
+                incoming = null,
                 timePropertyMs = dt,
                 timeOutgoingMs = null,
                 timeIncomingMs = null
@@ -273,7 +333,10 @@ class WebController(private var ont: JenaOntModel) {
                 ds = TDB2Factory.connectDataset("./_TDB")
                 ontQ.browseQuery(qOutgoing, ds)
             } finally {
-                try { ds?.close() } catch (_: Exception) {}
+                try {
+                    ds?.close()
+                } catch (_: Exception) {
+                }
             }
         } else {
             ontQ.browseQuery(qOutgoing)
@@ -292,7 +355,10 @@ class WebController(private var ont: JenaOntModel) {
                 ds = TDB2Factory.connectDataset("./_TDB")
                 ontQ.browseQuery(qIncoming, ds)
             } finally {
-                try { ds?.close() } catch (_: Exception) {}
+                try {
+                    ds?.close()
+                } catch (_: Exception) {
+                }
             }
         } else {
             ontQ.browseQuery(qIncoming)
@@ -302,26 +368,26 @@ class WebController(private var ont: JenaOntModel) {
         val outgoing = outRows.map { arr ->
             TripleRow(
                 property = arr.getOrNull(0) ?: "",
-                value    = arr.getOrNull(1) ?: "",
-                link     = arr.getOrNull(2)?.takeUnless { it == "x" },
-                rowspan  = arr.getOrNull(3)?.toIntOrNull() ?: 1
+                value = arr.getOrNull(1) ?: "",
+                link = arr.getOrNull(2)?.takeUnless { it == "x" },
+                rowspan = arr.getOrNull(3)?.toIntOrNull() ?: 1
             )
         }
         val incoming = inRows.map { arr ->
             TripleRow(
                 property = arr.getOrNull(0) ?: "",
-                value    = arr.getOrNull(1) ?: "",
-                link     = arr.getOrNull(2)?.takeUnless { it == "x" },
-                rowspan  = arr.getOrNull(3)?.toIntOrNull() ?: 1
+                value = arr.getOrNull(1) ?: "",
+                link = arr.getOrNull(2)?.takeUnless { it == "x" },
+                rowspan = arr.getOrNull(3)?.toIntOrNull() ?: 1
             )
         }
 
         val payload = BrowsePayload(
-            resourceURI    = resourceURI,
-            isProperty     = false,
-            propertyDetails= null,
-            outgoing       = outgoing,
-            incoming       = incoming,
+            resourceURI = resourceURI,
+            isProperty = false,
+            propertyDetails = null,
+            outgoing = outgoing,
+            incoming = incoming,
             timePropertyMs = null,
             timeOutgoingMs = tOut,
             timeIncomingMs = tIn
@@ -330,38 +396,37 @@ class WebController(private var ont: JenaOntModel) {
         return ResponseEntity.ok(ApiResponse(status = "ok", timeMs = total, data = payload))
     }
 
-    @CrossOrigin(origins = ["*"])
-    @GetMapping("/api/dump")
+
+    @GetMapping("/dump")
     fun dump(): ResponseEntity<ApiResponse<String>> {
         val t0 = System.currentTimeMillis()
 
-        // 1. 파일명 생성
-        val formatter = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd_HHmmss")
-        val filename = "./" + java.time.LocalDateTime.now().format(formatter) + ".rdf"
+        // 1) 파일명/확장자 결정: TDB면 .trig(데이터셋 전체), 아니면 .rdf(모델)
+        val ts = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd_HHmmss"))
+        val useTdb = OntologyProperties.useTDB
+        val ext = if (useTdb) ".trig" else ".rdf"
+        val filename = "./dump_$ts$ext"
         val file = java.io.File(filename)
 
         return try {
-            // 2. RDF/XML 저장
-            java.io.FileOutputStream(file).use { outStream ->
-                synchronized(this) { ont.write(outStream, "RDF/XML") }
-            }
+            // 2) 저장 (트랜잭션/스냅샷은 saveOntology 내부에서 처리)
+            ontology.saveOntology(filename, includeNamedGraphs = useTdb)
 
-            // 3. 후처리 (리터럴 타입 복원)
-            fixRdfStringLiterals(filename)
+            // 3) (선택) 기존에 사용하던 후처리가 있다면 RDF/XML일 때만 호출
+            // if (!useTdb) runCatching { fixRdfStringLiterals(filename) }
 
-            // 4. 내용 읽기
-            val rdfContent = file.readText(Charsets.UTF_8)
+            // 4) 파일 내용 읽어서 반환
+            val content = file.readText(Charsets.UTF_8)
             val dt = System.currentTimeMillis() - t0
-
             ResponseEntity.ok(
                 ApiResponse(
                     status = "success",
                     timeMs = dt,
-                    data = rdfContent
+                    data = content
                 )
             )
         } catch (e: Exception) {
-            logger.error("dumpApi error", e)
+            logger.error("dump error", e)
             val dt = System.currentTimeMillis() - t0
             ResponseEntity.status(500).body(
                 ApiResponse(
@@ -371,8 +436,8 @@ class WebController(private var ont: JenaOntModel) {
                 )
             )
         } finally {
-            // 6. 파일 삭제
-            try { if (file.exists()) file.delete() } catch (_: Exception) {}
+            // 5) 임시 파일 정리
+            runCatching { if (file.exists()) file.delete() }
         }
     }
 
@@ -401,7 +466,8 @@ class WebController(private var ont: JenaOntModel) {
             if (elem.childNodes.length == 1 &&
                 elem.firstChild.nodeType == org.w3c.dom.Node.TEXT_NODE &&
                 !elem.hasAttributeNS(rdfNS, "datatype") &&
-                !elem.hasAttribute("xml:lang")) {
+                !elem.hasAttribute("xml:lang")
+            ) {
 
                 val textContent = elem.textContent?.trim()
                 if (!textContent.isNullOrEmpty()) {
@@ -418,7 +484,6 @@ class WebController(private var ont: JenaOntModel) {
 
         logger.info("✔ Fixed and saved RDF/XML file: $filePath")
     }
-
 
 
     @CrossOrigin(origins = ["*"])
@@ -447,7 +512,7 @@ class WebController(private var ont: JenaOntModel) {
             try {
                 FileInputStream(file).use { input ->
                     val t0 = System.currentTimeMillis()
-                    synchronized(this) { ont.read(input, null, format) }
+                    ontology.writeTx { m -> m.read(input, null, format) }
                     totalParsingTime += (System.currentTimeMillis() - t0)
                 }
                 successCount++
@@ -506,7 +571,7 @@ class WebController(private var ont: JenaOntModel) {
             try {
                 // 파일 경로로 바로 읽거나, 스트림으로 읽거나 둘 중 택1
                 FileInputStream(file).use { input ->
-                    synchronized(this) { ont.read(input, null, format) }
+                    ontology.writeTx { m -> m.read(input, null, format) }
                 }
                 successCount++
                 if (deleteAfter) runCatching { file.delete() }
@@ -537,12 +602,10 @@ class WebController(private var ont: JenaOntModel) {
     }
 
 
-
     @CrossOrigin(origins = ["*"])
     @PostMapping("/ingest/dir")
     fun ingestFromDir(
-        @RequestParam("dir") dir: String,
-        @RequestParam("deleteAfter", defaultValue = "true") deleteAfter: Boolean,
+        @RequestParam("dir") dir: String, @RequestParam("deleteAfter", defaultValue = "true") deleteAfter: Boolean,
         @RequestParam("format", defaultValue = "RDF/XML") format: String
     ): ResponseEntity<ApiResponse<Map<String, Any>>> {
         logger.info("User Request POST /api/ingest/dir dir=$dir deleteAfter=$deleteAfter format=$format")
@@ -595,7 +658,10 @@ class WebController(private var ont: JenaOntModel) {
                     dataset.end()
                 }
             } finally {
-                try { dataset?.close() } catch (_: Exception) {}
+                try {
+                    dataset?.close()
+                } catch (_: Exception) {
+                }
             }
         } else {
             // 온메모리 모델
@@ -604,7 +670,7 @@ class WebController(private var ont: JenaOntModel) {
                 try {
                     java.io.FileInputStream(file).use { inputStream ->
                         val t0 = System.currentTimeMillis()
-                        synchronized(this) { ont.read(inputStream, null, format) }
+                        ontology.writeTx { m -> m.read(inputStream, null, format) }
                         totalParsingTime += (System.currentTimeMillis() - t0)
                     }
                     successCount++
@@ -642,98 +708,100 @@ class WebController(private var ont: JenaOntModel) {
     }
 
 
-
     @CrossOrigin(origins = ["*"])
     @PostMapping("/upload/rdf", consumes = ["multipart/form-data"])
     fun uploadRdf(
         @RequestParam("files") files: List<org.springframework.web.multipart.MultipartFile>,
         @RequestParam("format", defaultValue = "RDF/XML") format: String
     ): ResponseEntity<ApiResponse<Map<String, Any>>> {
+        logger.info("User Request POST /api/upload/rdf")
+
+        fun detectLang(name: String, fallback: String): String {
+            val lower = name.lowercase()
+            return when {
+                lower.endsWith(".ttl")                      -> "TURTLE"
+                lower.endsWith(".rdf") ||
+                        lower.endsWith(".owl") ||
+                        lower.endsWith(".xml")                      -> "RDF/XML"
+                lower.endsWith(".nt")                       -> "N-TRIPLES"
+                lower.endsWith(".nq")                       -> "NQUADS"
+                lower.endsWith(".trig")                     -> "TRIG"
+                lower.endsWith(".jsonld")                   -> "JSON-LD"
+                else                                        -> fallback
+            }
+        }
 
         var successCount = 0
         var failureCount = 0
         var totalParsingTime = 0L
 
-        val useTDB = OntologyProperties.useTDB
-
-        if (useTDB) {
-            var dataset: org.apache.jena.query.Dataset? = null
-            try {
-                dataset = org.apache.jena.tdb2.TDB2Factory.connectDataset("./_TDB")
-                dataset.begin(org.apache.jena.query.ReadWrite.WRITE)
-                try {
-                    val model = dataset.defaultModel
-                    files.forEach { file ->
-                        val name = file.originalFilename ?: "(no-name)"
-                        if (file.isEmpty || !(name.endsWith(".rdf", true) || name.endsWith(".xml", true))) {
-                            logger.warn("Skipped file: $name (not .rdf/.xml or empty)")
-                            return@forEach
-                        }
-                        try {
-                            val t0 = System.currentTimeMillis()
-                            file.inputStream.use { input ->
-                                model.read(input, null, format)
-                            }
-                            totalParsingTime += (System.currentTimeMillis() - t0)
-                            successCount++
-                        } catch (e: org.apache.jena.riot.RiotException) {
-                            logger.error("RiotException in file: $name")
-                            failureCount++
-                        } catch (e: Exception) {
-                            logger.error("Exception in file: $name, ${e.message}")
-                            failureCount++
-                        }
-                    }
-                    dataset.commit()
-                } catch (e: Exception) {
-                    logger.error("Dataset error: ${e.message}")
-                    dataset.abort()
-                    failureCount = files.size
-                } finally {
-                    dataset.end()
-                }
-            } finally {
-                try { dataset?.close() } catch (_: Exception) {}
+        files.forEach { file ->
+            val name = file.originalFilename ?: "(no-name)"
+            if (file.isEmpty) {
+                logger.warn("Skipped file: $name (empty)")
+                return@forEach
             }
-        } else {
-            // 온메모리 모델
-            files.forEach { file ->
-                val name = file.originalFilename ?: "(no-name)"
-                if (file.isEmpty || !(name.endsWith(".rdf", true) || name.endsWith(".xml", true))) {
-                    logger.warn("Skipped file: $name (not .rdf/.xml or empty)")
-                    return@forEach
+            val lang = detectLang(name, format)
+            try {
+                val t0 = System.currentTimeMillis()
+                file.inputStream.use { input ->
+                    // OntModel.read(...) 사용으로 OntModel 미사용 경고 제거
+                    ontology.writeTx { txOnt -> txOnt.read(input, null, lang) }
                 }
-                try {
-                    val t0 = System.currentTimeMillis()
-                    file.inputStream.use { input ->
-                        synchronized(this) { ont.read(input, null, format) }
-                    }
-                    totalParsingTime += (System.currentTimeMillis() - t0)
-                    successCount++
-                } catch (e: org.apache.jena.riot.RiotException) {
-                    logger.error("RiotException in file: $name")
-                    failureCount++
-                } catch (e: Exception) {
-                    logger.error("Exception in file: $name, ${e.message}")
-                    failureCount++
-                }
+                totalParsingTime += (System.currentTimeMillis() - t0)
+                successCount++
+            } catch (e: org.apache.jena.riot.RiotException) {
+                logger.error("RiotException in file: $name", e)
+                failureCount++
+            } catch (e: Exception) {
+                logger.error("Exception in file: $name, ${e.message}", e)
+                failureCount++
             }
         }
 
+        // 업로드 직후 owl:imports 체인을 따라가며 보강 로딩
+        val importsSummary = try {
+            ontology.loadOntologiesFrom(sources = emptyList(), followImports = true, followNamespaces = true)
+        } catch (e: Exception) {
+            logger.warn("followImports after upload failed: ${e.message}", e)
+            // 실패 시 빈 요약으로 대체
+            OntologyLoadSummary(
+                totalTried = 0,
+                readAuto   = 0,
+                failed     = 0,
+                loadedIRIs = emptyList(),
+                failedIRIs = emptyList(),
+                elapsedMs  = 0
+            )
+        }
+
+        // 총 소요 시간에 imports 보강 시간도 포함하고 싶다면 다음 줄 사용:
+        val totalTime = totalParsingTime + importsSummary.elapsedMs
+
         return ResponseEntity.ok(
-            jenavi.contracts.ApiResponse(
+            ApiResponse(
                 status = "ok",
-                timeMs = totalParsingTime,
+                timeMs = totalTime,
                 data = mapOf(
                     "format" to format,
                     "successCount" to successCount,
                     "failureCount" to failureCount,
-                    "totalFiles" to files.size
+                    "totalFiles" to files.size,
+                    // imports 보강 결과 요약
+                    "imports" to mapOf(
+                        "tried" to importsSummary.totalTried,
+                        "loaded" to importsSummary.readAuto,
+                        "failed" to importsSummary.failed,
+                        "elapsedMs" to importsSummary.elapsedMs
+                    )
                 )
             )
         )
     }
 
 }
+
+
+
 
 // ./gradlew bootRun
