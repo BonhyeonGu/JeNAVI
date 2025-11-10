@@ -23,14 +23,4 @@ class OntologyConfig {
         datasetProvider.ifAvailable { ds -> ont.attachDataset(ds) }
         return ont
     }
-
-    // 💡 부팅 시점엔 데이터 접근 금지 — Reasoner만 “빈 상태”로 만든다
-    @Bean
-    fun jenaReasoner(): Reasoner {
-        return when (OntologyProperties.reasonerType) {
-            "RDFS"      -> ReasonerRegistry.getRDFSReasoner()
-            "OWL_MICRO" -> ReasonerRegistry.getOWLMicroReasoner()
-            else        -> ReasonerRegistry.getOWLMiniReasoner() // 기본
-        }
-    }
 }

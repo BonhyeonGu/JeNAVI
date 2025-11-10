@@ -36,6 +36,10 @@ class OntQuery(
 
         // 필요 시 끄고 켜기 — 서비스 성격상 기본 ON 권장
         private const val ENABLE_INFERENCE: Boolean = true
+
+        init {
+            org.apache.jena.geosparql.configuration.GeoSPARQLConfig.setupMemoryIndex()
+        }
     }
 
     fun runSparql(queryStr: String): TimedResult {

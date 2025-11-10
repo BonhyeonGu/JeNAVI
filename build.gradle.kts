@@ -16,30 +16,37 @@ java {
 
 repositories {
 	mavenCentral()
+	maven { url = uri("https://repo.osgeo.org/repository/release/") } // OSGeo
+	maven { url = uri("https://maven.geo-solutions.it/") }            // GeoSolutions (백업)
 }
 
 dependencies {
-	// Spring
+	// --- Jena ---
+	implementation("org.apache.jena:apache-jena-libs:5.5.0")
+	implementation("org.apache.jena:jena-geosparql:5.5.0")
+
+	// Apache SIS (모두 1.4로 통일)
+	implementation("org.apache.sis.core:sis-referencing:1.4")
+	implementation("org.apache.sis.core:sis-metadata:1.4")
+	implementation("org.apache.sis.non-free:sis-embedded-data:1.4")
+
+	// Derby (EPSG 임베디드 DB용)
+	implementation("org.apache.derby:derby:10.17.1.0")
+
+	// (선택) Jenax
+	implementation("org.aksw.jenax:jenax-arq-plugins-bundle:5.4.0-1")
+
+	// --- 나머지 기존 의존성 ---
 	implementation("org.springframework.boot:spring-boot-starter")
-	implementation("org.jetbrains.kotlin:kotlin-reflect") 
-	testImplementation("org.springframework.boot:spring-boot-starter-test")
 	implementation("org.springframework.boot:spring-boot-starter-web")
 	implementation("org.springframework.boot:spring-boot-starter-thymeleaf")
 	implementation("org.springframework.boot:spring-boot-starter-websocket")
+	implementation("org.jetbrains.kotlin:kotlin-reflect")
+	testImplementation("org.springframework.boot:spring-boot-starter-test")
 
-	// Logback
-	//implementation("ch.qos.logback:logback-classic:1.4.12") // Logback Classic
-	//implementation("ch.qos.logback:logback-core:1.4.12")
-
-	// Jena
-    implementation("org.apache.jena", "apache-jena-libs", "5.0.0")
-
-	// JSON Read
 	implementation("org.json:json:20231013")
-
-	// Kotlin + Jackson 연동 모듈
 	implementation("com.fasterxml.jackson.module:jackson-module-kotlin")
-	implementation("org.apache.kafka:kafka-clients:3.7.0") // Kafka 클라이언트
+	implementation("org.apache.kafka:kafka-clients:3.7.0")
 }
 
 tasks.withType<KotlinCompile> {
