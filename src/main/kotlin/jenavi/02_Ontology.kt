@@ -2,27 +2,37 @@ package jenavi
 
 import jenavi.config.OntologyProperties
 
-
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
+
 import org.apache.jena.ontology.OntModel
 import org.apache.jena.ontology.OntModelSpec
 import org.apache.jena.ontology.OntDocumentManager
 import org.apache.jena.query.Dataset
 import org.apache.jena.rdf.model.ModelFactory
-import org.apache.jena.riot.RiotException
-import org.apache.jena.tdb2.TDB2Factory
 import org.apache.jena.rdf.model.RDFNode
+import org.apache.jena.rdf.model.Resource
+import org.apache.jena.riot.RiotException
+import org.apache.jena.riot.RDFFormat
+import org.apache.jena.riot.Lang
 import org.apache.jena.riot.RDFDataMgr
 import org.apache.jena.system.Txn
-import org.apache.jena.rdf.model.Resource
-import org.apache.jena.riot.RDFFormat
+import org.apache.jena.tdb2.TDB2Factory
 import org.apache.jena.vocabulary.OWL
 
 import java.io.File
+import java.io.ByteArrayInputStream
 import java.nio.file.Files
 import java.nio.file.Paths
-import java.nio.file.Path
+
+import java.util.concurrent.locks.ReentrantReadWriteLock
+import kotlin.concurrent.read
+import kotlin.concurrent.write
+
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
 
 data class OntologyLoadSummary(
     val totalTried: Int,
@@ -56,23 +66,14 @@ class Ontology(private var model: OntModel) {
 
         // 온톨로지 생성
         fun createForStartup(useTDB: Boolean): Ontology {
-            // 래핑용: 생성자에서 imports 자동 로딩 금지(닫힌 그래프 접근 방지)
-            val wrapDocMgr = OntDocumentManager().apply { processImports = false }
-            val wrapSpec   = OntModelSpec(OntModelSpec.OWL_MEM_TRANS_INF).apply { documentManager = wrapDocMgr }
+            val docMgr = OntDocumentManager().apply { processImports = false } // ★ 통일
+            val spec   = OntModelSpec(OntModelSpec.OWL_MEM_TRANS_INF).apply { documentManager = docMgr }
 
             return if (!useTDB) {
-                // 인메모리: 곧바로 로딩
-                val loadDocMgr = OntDocumentManager().apply { processImports = true }
-                val loadSpec   = OntModelSpec(OntModelSpec.OWL_MEM_TRANS_INF).apply { documentManager = loadDocMgr }
-                val mem        = ModelFactory.createOntologyModel(loadSpec)
-                Ontology(mem).also { it.loadDefaultOntologies(followImports = true) }
+                Ontology(ModelFactory.createOntologyModel(spec))
             } else {
-                // TDB: 기존 내용을 보존한 채 래핑만
                 val ds = TDB2Factory.connectDataset(PATH_DIR_TDB)
-                val tdbModel = Txn.calculateRead(ds) {
-                    ModelFactory.createOntologyModel(wrapSpec, ds.defaultModel)
-                }
-                Ontology(tdbModel).also { it.attachDataset(ds) }
+                Ontology(ModelFactory.createOntologyModel(spec, ds.defaultModel)).also { it.attachDataset(ds) }
             }
         }
     }
@@ -85,16 +86,13 @@ class Ontology(private var model: OntModel) {
     private var tdbDataset: Dataset? = null
     fun attachDataset(ds: Dataset?) { this.tdbDataset = ds }
 
-
-    // --- 외부 공개 API (모델 중심/데이터셋 중심) ---
-    // Ontology.kt 상단 어딘가에 캐시할 스펙을 준비
     private val wrapDocMgr = OntDocumentManager().apply { processImports = false }
     private val wrapSpec   = OntModelSpec(OntModelSpec.OWL_MEM_TRANS_INF).apply {
         documentManager = wrapDocMgr
     }
 
-    // 기존: tdbDataset 있으면 Txn 안에서 this.model을 넘겼음 (문제 원인)
-    // 변경: TDB면 Txn 안에서 매번 새 OntModel로 ds.defaultModel을 감싸서 넘김
+    private val rwLock = ReentrantReadWriteLock()
+
     fun <T> readTx(block: (OntModel) -> T): T {
         val ds = tdbDataset
         return if (ds != null) {
@@ -103,32 +101,23 @@ class Ontology(private var model: OntModel) {
                 block(txModel)
             }
         } else {
-            block(this.model)
+            rwLock.read { block(this.model) }
         }
     }
-
 
     fun <T> writeTx(block: (OntModel) -> T): T {
         val ds = tdbDataset
         return if (ds != null) {
             Txn.calculateWrite(ds) {
-                // 1) TDB와 분리된 임시 OntModel (추론 켬, imports off)
-                val tempOnt = ModelFactory.createOntologyModel(wrapSpec)
-                // 2) 호출자가 tempOnt 에 자유롭게 write(read/ add/ etc.)
-                val res: T = block(tempOnt)
-                // 3) 트랜잭션 끝에 한 번에 TDB default 그래프에 병합 (추가만)
-                ds.defaultModel.add(tempOnt.baseModel)
-                res
+                val txModel = ModelFactory.createOntologyModel(wrapSpec, ds.defaultModel)
+                block(txModel)
             }
         } else {
-            // 인메모리는 기존 모델에 직접
-            block(this.model)
+            rwLock.write { block(this.model) }
         }
     }
 
-
     // ================================================================================================
-
 
     // 1) readRDF: tx 모델을 받아서 그걸로만 읽기
     fun readRDF(pathOrDir: String, recursive: Boolean = true): Int =
@@ -138,33 +127,30 @@ class Ontology(private var model: OntModel) {
             if (f.isDirectory) {
                 val files = if (recursive) f.walkTopDown() else f.walk()
                 files.filter { it.isFile }.forEach { file ->
-                    loaded += readOneRdfFile(txModel, file)   // ⬅ txModel 전달
+                    loaded += readOneRdfFile(txModel, file)
                 }
             } else if (f.isFile) {
-                loaded += readOneRdfFile(txModel, f)          // ⬅ txModel 전달
+                loaded += readOneRdfFile(txModel, f)
             } else {
                 logger.warn("readRDF: not found: $pathOrDir")
             }
             loaded
         }
 
-
-    // 2) readOneRdfFile: 필드 model 대신 txModel 사용
     private fun readOneRdfFile(txModel: OntModel, file: File): Int = try {
         logger.info("Read RDF => ${file.absolutePath}")
-        RDFDataMgr.read(txModel, file.toURI().toString()) // ⬅ txModel 사용
+        RDFDataMgr.read(txModel, file.toURI().toString())
         1
     } catch (e: RiotException) {
-        logger.error("RiotException => ${file.name} : ${e.message}"); 0
+        logger.error("RiotException => ${file.name} : ${e.message}")
+        0
     } catch (e: Exception) {
-        logger.error("Unexpected => ${file.name} : ${e.message}"); 0
+        logger.error("Unexpected => ${file.name} : ${e.message}")
+        0
     }
-
 
     // ================================================================================================
 
-
-    // 온톨로지 덤프
     fun saveOntology(path: String, includeNamedGraphs: Boolean = false): Long {
         val p = Paths.get(path)
         p.parent?.let { Files.createDirectories(it) }
@@ -173,7 +159,6 @@ class Ontology(private var model: OntModel) {
         val ds = tdbDataset
 
         return if (includeNamedGraphs && ds != null) {
-            // 데이터셋 전체 저장 (TRiG/N-Quads/…)
             val fmt = when {
                 lower.endsWith(".trig") -> RDFFormat.TRIG_PRETTY
                 lower.endsWith(".nq")   -> RDFFormat.NQUADS_UTF8
@@ -187,7 +172,6 @@ class Ontology(private var model: OntModel) {
                 Files.size(p)
             }
         } else {
-            // 현재 모델(디폴트 그래프)만 저장 (TTL/RDF/XML/JSON-LD/N-Triples)
             val fmt = when {
                 lower.endsWith(".ttl")     -> RDFFormat.TURTLE_PRETTY
                 lower.endsWith(".rdf") ||
@@ -206,8 +190,6 @@ class Ontology(private var model: OntModel) {
         }
     }
 
-
-    // 파일 입출력 오류 해결
     private fun removeBOM(file: File): File {
         val tempFile = File.createTempFile("cleaned_", ".ttl")
         val reader = file.inputStream().reader(Charsets.UTF_8)
@@ -219,11 +201,8 @@ class Ontology(private var model: OntModel) {
         return tempFile
     }
 
-
     // ================================================================================================
 
-
-    // TDB 용량 표시
     fun tdbDiskUsageBytes(): Long {
         val dir = File(PATH_DIR_TDB)
         if (!dir.exists() || !dir.isDirectory) {
@@ -232,30 +211,19 @@ class Ontology(private var model: OntModel) {
         }
 
         var total = 0L
-        var files = 0
-        var dirs = 0
-
         Files.walk(dir.toPath()).use { stream ->
             stream.forEach { p ->
                 try {
-                    if (Files.isDirectory(p)) {
-                        dirs++
-                    } else if (Files.isRegularFile(p)) {
-                        total += kotlin.runCatching { Files.size(p) }.getOrDefault(0L)
-                        files++
+                    if (Files.isRegularFile(p)) {
+                        total += runCatching { Files.size(p) }.getOrDefault(0L)
                     }
                 } catch (_: Exception) {
-                    // 권한/락 문제는 무시
                 }
             }
         }
-
-//        logger.info("TDB disk usage => ${humanReadable(total)} ($total bytes) | files=$files, dirs=$dirs, path=$PATH_DIR_TDB")
         return total
     }
 
-
-    // 용량 보기 편하게
     private fun humanReadable(bytes: Long): String {
         if (bytes < 1024) return "${bytes} B"
         val units = arrayOf("KB", "MB", "GB", "TB", "PB", "EB")
@@ -268,15 +236,11 @@ class Ontology(private var model: OntModel) {
         return String.format(java.util.Locale.US, "%.2f %s", v, units[i])
     }
 
-
     // ================================================================================================
 
-    // 온톨로지 초기화
     fun clearJenaIoCachesCompat() {
-        // 문서 캐시
         runCatching { OntDocumentManager.getInstance().clearCache() }
 
-        // 1차: StreamManager.makeDefault() + setGlobal(...) 시도
         val ok1 = runCatching {
             val cls = Class.forName("org.apache.jena.riot.system.stream.StreamManager")
             val makeDefault = cls.getMethod("makeDefault")
@@ -286,13 +250,11 @@ class Ontology(private var model: OntModel) {
         }.isSuccess
 
         if (!ok1) {
-            // 2차: 기본 생성자로 StreamManager 만들고 setGlobal(...) 시도
             val ok2 = runCatching {
                 val cls = Class.forName("org.apache.jena.riot.system.stream.StreamManager")
                 val ctor = cls.getDeclaredConstructor().apply { isAccessible = true }
                 val sm = ctor.newInstance()
 
-                // (가능하면 LocationMapper도 초기화)
                 runCatching {
                     val lmCls = Class.forName("org.apache.jena.riot.system.stream.LocationMapper")
                     val lmCtor = lmCls.getDeclaredConstructor().apply { isAccessible = true }
@@ -306,7 +268,6 @@ class Ontology(private var model: OntModel) {
             }.isSuccess
 
             if (!ok2) {
-                // 3차: 최후수단 — 전역 LocationMapper만 리셋
                 runCatching {
                     val lmCls = Class.forName("org.apache.jena.riot.system.stream.LocationMapper")
                     val lmCtor = lmCls.getDeclaredConstructor().apply { isAccessible = true }
@@ -317,7 +278,6 @@ class Ontology(private var model: OntModel) {
             }
         }
     }
-
 
     fun truncateTDB(): Long {
         val t0 = System.currentTimeMillis()
@@ -331,42 +291,225 @@ class Ontology(private var model: OntModel) {
         return System.currentTimeMillis() - t0
     }
 
+    private fun resetInMemoryModel() {
+        runCatching { this.model.close() }
+        this.model = ModelFactory.createOntologyModel(wrapSpec)
+    }
 
     fun fullResetAndReload(): Long {
         val t0 = System.currentTimeMillis()
 
-        truncateTDB()
-        clearJenaIoCachesCompat()   // ← 여기!
+        if (OntologyProperties.useTDB) {
+            truncateTDB()
+        } else {
+            resetInMemoryModel()
+        }
 
-        loadDefaultOntologies()            // txModel만 사용하도록 유지
+        clearJenaIoCachesCompat()
+        loadDefaultOntologies(followImports = true)
 
         return System.currentTimeMillis() - t0
     }
 
-
-
-
+    // =================================================================================================
+    // URL 로더 (fallback + HTTP bytes 로딩 + 파싱 fallback)
     // =================================================================================================
 
-    private fun readIntoOnt(ont: OntModel, iri: String, c: LoadCounters) {
-        c.totalTried++
-        runCatching {
-            // OntModel 은 Model 을 구현하므로 그대로 전달해도 됩니다.
-            RDFDataMgr.read(ont, iri)
-            c.readAuto++
-        }.onFailure {
-            c.failed++
-            logger.warn("Read failed: $iri (${it.message})")
+    private val httpClient: HttpClient = HttpClient.newBuilder()
+        .followRedirects(HttpClient.Redirect.ALWAYS) // 303 등 자동 추적
+        .build()
+
+    private val ACCEPT_RDF =
+        "text/turtle, application/rdf+xml;q=0.95, application/ld+json;q=0.9, application/n-triples;q=0.8, */*;q=0.1"
+
+    // RDF로 읽을 의미가 거의 없는 것(로그/오류 소음 방지)
+    private fun shouldSkipIri(url: String): Boolean {
+        val base = url.substringBefore('#')
+        return base == "http://www.w3.org/2001/XMLSchema" ||
+                base == "http://www.w3.org/XML/1998/namespace"
+    }
+
+    private fun guessLangByExt(url: String): Lang? {
+        val lower = url.lowercase()
+        return when {
+            lower.endsWith(".ttl")    -> Lang.TURTLE
+            lower.endsWith(".rdf")    -> Lang.RDFXML
+            lower.endsWith(".xml")    -> Lang.RDFXML
+            lower.endsWith(".owl")    -> Lang.RDFXML
+            lower.endsWith(".nt")     -> Lang.NTRIPLES
+            lower.endsWith(".trig")   -> Lang.TRIG
+            lower.endsWith(".nq")     -> Lang.NQUADS
+            lower.endsWith(".jsonld") -> Lang.JSONLD
+            else -> null
         }
     }
 
+    // 요구사항: 실패하면 .ttl .rdf .xml 을 시도 (순서 고정)
+    private fun buildFallbackUrls(iri: String): List<String> {
+        val raw = iri.trim()
+        val base = raw.substringBefore("#").trim()
 
-    // 경로(디렉터리/파일)를 받아 txModel(OntModel)로 일괄 로드
+        val set = LinkedHashSet<String>()
+
+        fun add(u: String) {
+            if (u.isNotBlank()) set.add(u)
+        }
+
+        add(raw)
+        add(base)
+
+        // base가 "/"로 끝나면 base.ttl 같은건 의미 없으므로 제외
+        if (!base.endsWith("/")) {
+            val lower = base.lowercase()
+            val hasKnown =
+                lower.endsWith(".ttl") || lower.endsWith(".rdf") || lower.endsWith(".xml") || lower.endsWith(".owl")
+
+            val baseNoExt = if (hasKnown && base.contains(".")) base.substringBeforeLast(".") else base
+
+            // base 자체가 확장자 없으면 바로 base.ttl/rdf/xml
+            if (!hasKnown) {
+                add("$base.ttl")
+                add("$base.rdf")
+                add("$base.xml")
+            } else {
+                // base가 .owl 등일 때도, "확장자 제거 + .ttl/.rdf/.xml" 재시도 가능하게
+                add("$baseNoExt.ttl")
+                add("$baseNoExt.rdf")
+                add("$baseNoExt.xml")
+            }
+        }
+
+        return set.toList()
+    }
+
+    private data class HttpFetch(val ok: Boolean, val statusOrErr: String, val contentType: String?, val bytes: ByteArray)
+
+    private fun httpGetBytes(url: String): HttpFetch {
+        return try {
+            val req = HttpRequest.newBuilder(URI.create(url))
+                .header("Accept", ACCEPT_RDF)
+                .header("User-Agent", "Mozilla/5.0")
+                .GET()
+                .build()
+
+            val res = httpClient.send(req, HttpResponse.BodyHandlers.ofByteArray())
+            val code = res.statusCode()
+            val ct = res.headers().firstValue("Content-Type").orElse(null)
+            val bytes = res.body() ?: ByteArray(0)
+
+            if (code in 200..299) HttpFetch(true, "$code", ct, bytes)
+            else HttpFetch(false, "$code", ct, bytes)
+        } catch (e: Exception) {
+            HttpFetch(false, e.message ?: "http error", null, ByteArray(0))
+        }
+    }
+
+    private fun looksLikeHtml(contentType: String?, bytes: ByteArray): Boolean {
+        if (contentType?.contains("text/html", ignoreCase = true) == true) return true
+        val head = runCatching { bytes.take(200).toByteArray().toString(Charsets.UTF_8) }.getOrDefault("")
+        val t = head.trimStart()
+        return t.startsWith("<!doctype", ignoreCase = true) || t.startsWith("<html", ignoreCase = true)
+    }
+
+    private fun guessLangByContentType(contentType: String?): Lang? {
+        val ct = contentType?.lowercase() ?: return null
+        return when {
+            ct.contains("text/turtle") -> Lang.TURTLE
+            ct.contains("application/rdf+xml") -> Lang.RDFXML
+            ct.contains("application/ld+json") -> Lang.JSONLD
+            ct.contains("application/n-triples") -> Lang.NTRIPLES
+            else -> null
+        }
+    }
+
+    private fun parseWithFallback(ont: OntModel, baseUrl: String, contentType: String?, bytes: ByteArray): Pair<Boolean, String> {
+        if (bytes.isEmpty()) return false to "empty body"
+        if (looksLikeHtml(contentType, bytes)) return false to "html response"
+
+        val first = guessLangByExt(baseUrl) ?: guessLangByContentType(contentType)
+
+        val tries = buildList {
+            if (first != null) add(first)
+            addAll(listOf(Lang.TURTLE, Lang.RDFXML, Lang.JSONLD, Lang.NTRIPLES).filter { it != first })
+        }
+
+        var lastErr = "parse failed"
+        for (lang in tries) {
+            val ok = runCatching {
+                ByteArrayInputStream(bytes).use { ins ->
+                    RDFDataMgr.read(ont, ins, baseUrl, lang)
+                }
+            }.onFailure { e ->
+                lastErr = e.message ?: "parse error"
+            }.isSuccess
+
+            if (ok) return true to ""
+        }
+        return false to lastErr
+    }
+
+    private fun tryReadOneCandidate(ont: OntModel, url: String): Pair<Boolean, String> {
+        val u = url.trim()
+        if (u.isBlank()) return false to "blank url"
+        if (shouldSkipIri(u)) return true to "skipped"
+
+        // file: 은 Jena가 잘 처리함
+        if (u.startsWith("file:", ignoreCase = true)) {
+            return runCatching { RDFDataMgr.read(ont, u) }.fold(
+                onSuccess = { true to "" },
+                onFailure = { false to (it.message ?: "file read error") }
+            )
+        }
+
+        // 1) 1차: 기존 방식(Jena가 직접 URL을 열어서 읽음)
+        val lang = guessLangByExt(u)
+        val ok1 = runCatching {
+            if (lang != null) RDFDataMgr.read(ont, u, lang) else RDFDataMgr.read(ont, u)
+        }.isSuccess
+        if (ok1) return true to ""
+
+        // 2) 2차: 브라우저에선 열리는데 Jena가 Content-Type/redirect 때문에 실패하는 케이스 대비
+        if (u.startsWith("http://", true) || u.startsWith("https://", true)) {
+            val f = httpGetBytes(u)
+            if (!f.ok) return false to f.statusOrErr
+
+            val (ok2, err2) = parseWithFallback(ont, u, f.contentType, f.bytes)
+            if (ok2) return true to ""
+            return false to err2
+        }
+
+        return false to "read failed"
+    }
+
+    // --- 여기: 당신이 올린 readIntoOnt를 더 견고하게 교체한 버전 ---
+    private fun readIntoOnt(ont: OntModel, iri: String, c: LoadCounters) {
+        val candidates = buildFallbackUrls(iri)
+
+        var lastErr = "unknown"
+        for (u in candidates) {
+            c.totalTried++
+            val (ok, err) = tryReadOneCandidate(ont, u)
+            if (ok) {
+                // skipped 는 성공 취급(카운트/리스트는 원본 IRI 기준으로만)
+                if (err != "skipped") c.readAuto++
+                c.loadedIRIs.add(iri)
+                return
+            } else {
+                lastErr = err
+            }
+        }
+
+        c.failed++
+        c.failedIRIs.add(iri)
+        logger.warn("Read failed: $iri (tried=${candidates.joinToString()} | last=$lastErr)")
+    }
+
+    // =================================================================================================
+
     private fun readPathIntoOnt(ont: OntModel, pathStr: String, c: LoadCounters) {
         val p = Paths.get(pathStr)
         if (!Files.exists(p)) {
             val lower = pathStr.lowercase()
-            // 경로가 없더라도 URL처럼 보이면 URL 로더로 재시도
             if (lower.startsWith("http://") || lower.startsWith("https://") || lower.startsWith("file:")) {
                 readIntoOnt(ont, pathStr, c)
             } else {
@@ -382,56 +525,47 @@ class Ontology(private var model: OntModel) {
                 }
             }
         } else {
-            // 단일 파일
             readIntoOnt(ont, p.toUri().toString(), c)
         }
     }
 
     fun loadOntologiesFrom(
-        sources: List<String> = emptyList(),   // 경로(디렉터리/파일) 또는 URL
+        sources: List<String> = emptyList(),
         followImports: Boolean = true,
         followNamespaces: Boolean = false
     ): OntologyLoadSummary {
         val t0 = System.currentTimeMillis()
         return writeTx { txModel: OntModel ->
             val c = LoadCounters()
-
-            // 중복 방지용 (imports와 namespace 모두 공용)
             val seen = mutableSetOf<String>()
 
-            // ---- 1) 입력 소스 로드 (URL vs 경로 구분) ----
+            // 1) 입력 소스 로드
             sources.forEach { src ->
                 val lower = src.lowercase()
                 if (lower.startsWith("http://") || lower.startsWith("https://") || lower.startsWith("file:")) {
                     if (seen.add(src)) readIntoOnt(txModel, src, c)
                 } else {
-                    // 파일/디렉터리 자동 처리
-                    if (seen.add(java.io.File(src).canonicalPath)) {
+                    if (seen.add(File(src).canonicalPath)) {
                         readPathIntoOnt(txModel, src, c)
                     }
                 }
             }
 
-            // ---- 2) 네임스페이스 URI 따라가며 보강 (prefix map) ----
+            // 2) 네임스페이스 따라가며 보강
             if (followNamespaces) {
-                // 현재 모델의 prefix -> namespace URI 매핑에서 http(s)만 추출
                 val nsUris = txModel.nsPrefixMap.values
                     .filter { it.startsWith("http://") || it.startsWith("https://") }
-                    // namespace URI는 보통 끝이 '/' 또는 '#' 이지만, 그대로 dereference 시도
                     .distinct()
 
                 nsUris.forEach { ns ->
-                    if (seen.add(ns)) {
-                        readIntoOnt(txModel, ns, c)
-                    }
+                    if (seen.add(ns)) readIntoOnt(txModel, ns, c)
                 }
             }
 
-            // ---- 3) owl:imports 따라가며 보강 (sources/namespace가 비어 있어도 수행 가능) ----
+            // 3) owl:imports 따라가며 보강
             if (followImports) {
                 val toVisit: ArrayDeque<String> = ArrayDeque()
 
-                // 초기 import 수집(현재까지 읽힌 모델 기준)
                 run {
                     val it = txModel.listStatements(null as Resource?, OWL.imports, null as RDFNode?)
                     try {
@@ -444,13 +578,11 @@ class Ontology(private var model: OntModel) {
                     }
                 }
 
-                // 성공적으로 읽힌 경우에만 확장
                 while (toVisit.isNotEmpty()) {
                     val iri = toVisit.removeFirst()
                     val before = c.readAuto
                     readIntoOnt(txModel, iri, c)
                     if (c.readAuto > before) {
-                        // 새로 읽은 문서에서 추가 imports가 생겼을 수 있으므로 다시 수집
                         val it2 = txModel.listStatements(null as Resource?, OWL.imports, null as RDFNode?)
                         try {
                             while (it2.hasNext()) {
@@ -481,8 +613,6 @@ class Ontology(private var model: OntModel) {
         }
     }
 
-
-    // 기본(고정 경로) 버전은 이걸로 래핑해서 재사용
     fun loadDefaultOntologies(followImports: Boolean = true): OntologyLoadSummary =
         loadOntologiesFrom(
             sources = PATH_DIR_OWLS.toList() + listOf(PATH_DIR_OWL, PATH_DIR_RDF),

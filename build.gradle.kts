@@ -1,4 +1,6 @@
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
+import org.springframework.boot.gradle.tasks.bundling.BootJar
+import org.gradle.api.file.DuplicatesStrategy
 
 plugins {
 	id("org.springframework.boot") version "3.1.2"
@@ -8,7 +10,7 @@ plugins {
 }
 
 group = "9Bon"
-version = "0.0.1-SNAPSHOT"
+version = "0.0.2-SNAPSHOT"
 
 java {
 	sourceCompatibility = JavaVersion.VERSION_17
@@ -18,6 +20,20 @@ repositories {
 	mavenCentral()
 	maven { url = uri("https://repo.osgeo.org/repository/release/") } // OSGeo
 	maven { url = uri("https://maven.geo-solutions.it/") }            // GeoSolutions (백업)
+}
+
+/**
+ * 문제 원인:
+ *  - jaxb-core-4.0.3.jar 가 서로 다른 groupId로 2개 들어옴
+ *    (com.sun.xml.bind:jaxb-core) + (org.glassfish.jaxb:jaxb-core)
+ *  - bootJar는 BOOT-INF/lib에 의존성 jar를 "복사"하므로 파일명 중복이면 실패
+ *
+ * 해결:
+ *  - com.sun.xml.bind 쪽을 제외하고(org.glassfish 쪽만 사용) 중복 제거
+ */
+configurations.configureEach {
+	exclude(group = "com.sun.xml.bind", module = "jaxb-core")
+	exclude(group = "com.sun.xml.bind", module = "jaxb-impl")
 }
 
 dependencies {
@@ -47,6 +63,9 @@ dependencies {
 	implementation("org.json:json:20231013")
 	implementation("com.fasterxml.jackson.module:jackson-module-kotlin")
 	implementation("org.apache.kafka:kafka-clients:3.7.0")
+
+	// (선택) exclude 후 JAXB 런타임이 확실히 필요하면 아래를 명시해도 됨
+	// implementation("org.glassfish.jaxb:jaxb-runtime:4.0.3")
 }
 
 tasks.withType<KotlinCompile> {
@@ -61,13 +80,21 @@ tasks.withType<Test> {
 }
 
 tasks.withType(JavaExec::class.java) {
-    jvmArgs("-Xms32g", "-Xmx32g")
-	//export JAVA_OPTS="-Xms64g -Xmx64g
+	jvmArgs("-Xms64g", "-Xmx64g")
+	//export JAVA_OPTS="-Xms64g -Xmx64g"
 	//$env:GRADLE_OPTS="-Xmx800g"
 }
 
+/**
+ * (안전망) 혹시 다른 jar 중복이 남아도 bootJar가 바로 죽지 않게.
+ * exclude로 해결되면 없어도 되지만, 개발 중엔 편합니다.
+ */
+tasks.named<BootJar>("bootJar") {
+	duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
 tasks.register<JavaExec>("debug") {
-    mainClass.set("Jenavi.ApplicationKt")
-    classpath = sourceSets["main"].runtimeClasspath
-    jvmArgs("-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=*:5005")
+	mainClass.set("Jenavi.ApplicationKt")
+	classpath = sourceSets["main"].runtimeClasspath
+	jvmArgs("-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=*:5005")
 }

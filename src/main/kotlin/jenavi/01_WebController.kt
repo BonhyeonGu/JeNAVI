@@ -33,8 +33,23 @@ class WebController(private val ontology: Ontology) {
     private val logger: Logger = LoggerFactory.getLogger(WebController::class.java)
 
     @Volatile
-    private var ontQ: OntQuery = OntQuery({ ontology.ontologyModel }, cache = true)
+    private var ontQ: OntQuery = OntQuery(ontology, cache = true)
 
+    init {
+        // 서버 기동 시 1회 자동 로드
+        try {
+            logger.info("Startup: loadDefaultOntologies from ./_OWL + ./_RDF ...")
+            val sum = ontology.loadDefaultOntologies(followImports = true)
+            ontQ = OntQuery(ontology, cache = true)
+
+            logger.info(
+                "Startup load done: tried=${sum.totalTried}, loaded=${sum.readAuto}, failed=${sum.failed}, elapsedMs=${sum.elapsedMs}"
+            )
+        } catch (e: Exception) {
+            logger.error("Startup ontology loading failed", e)
+            throw e
+        }
+    }
 
     // --- Health ---
     @GetMapping("/ping")
@@ -155,7 +170,7 @@ class WebController(private val ontology: Ontology) {
         logger.info("User Request GET /api/init : FULL reset")
         return try {
             val elapsed = ontology.fullResetAndReload()
-            ontQ = OntQuery({ ontology.ontologyModel }, cache = true)
+            ontQ = OntQuery(ontology, cache = true)
             ResponseEntity.ok(
                 ApiResponse(
                     status = "ok",
@@ -183,8 +198,8 @@ class WebController(private val ontology: Ontology) {
     @PostMapping("/query")
     fun query(@RequestBody request: SparqlRequest): ResponseEntity<ApiResponse<Any>> {
         val query = request.query.trim()
-        logger.info("POST /api/queryRun : ${query.take(100).replace('\n', ' ')}")
-
+        //logger.info("POST /api/queryRun : ${query.replace('\n', ' ')}")
+        logger.info("POST /api/queryRun")
         return try {
             val timed: TimedResult = ontQ.runSparql(query)
 
