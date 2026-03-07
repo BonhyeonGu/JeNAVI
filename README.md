@@ -23,11 +23,18 @@ This repository is intended solely for development purposes and not for deployme
 
 ## Description
 
-This service provides web-based functionality to facilitate the use of ontologies with KBMS. It allows users to query SPARQL, store, update, and conduct experimental measurements according to their needs
+Jenavi is a custom API web service built entirely on Apache Jena, operating independently without relying on Fuseki. This service provides web-based functionality to facilitate the use of ontologies with Knowledge Base Management Systems (KBMS). It allows users to query SPARQL, store, update, and conduct experimental measurements according to their needs by handling semantic web data and RDF models through a lightweight interface.
 
-## Function
+## Features
 
-- Aggregates pre-prepared OWL and instance RDF at runtime, passes them through a reasoner, verifies, and then loads them.
-- Instance browser
-- Executes queries mapped to routes or supports a webpage form using SELECT
-- Functional operations such as storing and updating instance RDF
+- **Storage Mode Selection (Experimental)**
+  - Choose between **TDB** (disk-based storage for large datasets) or **On-Memory** (for fast processing and experimental testing).
+- **RDF Data Management**
+  - **Upload:** Easily upload external RDF files into the system.
+  - **Initialization:** Clear and reset all currently loaded information in the storage to a clean state.
+  - **Aggregation & Reasoning:** Aggregates pre-prepared OWL and instance RDF at runtime, passes them through a reasoner, verifies, and then loads them.
+  - **Functional Operations:** Store and update instance RDF data as needed.
+- **SPARQL Query Execution**
+  - Executes queries mapped to specific routes or supports a webpage form using SELECT to retrieve and return data.
+- **Data Browser**
+  - A built-in instance browser to intuitively check the currently loaded triples and graph structures.
