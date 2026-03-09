@@ -17,7 +17,7 @@ This repository is intended solely for development purposes and not for deployme
 
 <div align="center">
 
-![Demo](https://github.com/user-attachments/assets/c9220444-66d2-4f6d-b8e3-0b1cba79f4cd)
+![Demo](https://github.com/user-attachments/assets/4994e7a3-a8d9-4c64-94c6-f0248041d67f)
 
 </div>
 
