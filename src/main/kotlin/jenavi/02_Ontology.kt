@@ -34,6 +34,9 @@ import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 
+import org.apache.jena.reasoner.rulesys.GenericRuleReasoner
+import org.apache.jena.reasoner.rulesys.Rule
+
 data class OntologyLoadSummary(
     val totalTried: Int,
     val readAuto: Int,
@@ -190,17 +193,6 @@ class Ontology(private var model: OntModel) {
         }
     }
 
-    private fun removeBOM(file: File): File {
-        val tempFile = File.createTempFile("cleaned_", ".ttl")
-        val reader = file.inputStream().reader(Charsets.UTF_8)
-        val content = reader.readText()
-        reader.close()
-
-        tempFile.writeText(content, Charsets.UTF_8)
-        logger.info("BOM 제거 완료: ${file.name}")
-        return tempFile
-    }
-
     // ================================================================================================
 
     fun tdbDiskUsageBytes(): Long {
@@ -222,18 +214,6 @@ class Ontology(private var model: OntModel) {
             }
         }
         return total
-    }
-
-    private fun humanReadable(bytes: Long): String {
-        if (bytes < 1024) return "${bytes} B"
-        val units = arrayOf("KB", "MB", "GB", "TB", "PB", "EB")
-        var v = bytes.toDouble()
-        var i = -1
-        while (v >= 1024 && i < units.lastIndex) {
-            v /= 1024.0
-            i++
-        }
-        return String.format(java.util.Locale.US, "%.2f %s", v, units[i])
     }
 
     // ================================================================================================
@@ -481,7 +461,6 @@ class Ontology(private var model: OntModel) {
         return false to "read failed"
     }
 
-    // --- 여기: 당신이 올린 readIntoOnt를 더 견고하게 교체한 버전 ---
     private fun readIntoOnt(ont: OntModel, iri: String, c: LoadCounters) {
         val candidates = buildFallbackUrls(iri)
 
@@ -618,4 +597,37 @@ class Ontology(private var model: OntModel) {
             sources = PATH_DIR_OWLS.toList() + listOf(PATH_DIR_OWL, PATH_DIR_RDF),
             followImports = followImports
         )
+
+    fun applyRulesAndMaterialize(ruleString: String): Pair<Long, Long> {
+        val t0 = System.currentTimeMillis()
+
+        // 1) 룰 파싱
+        val rules = Rule.parseRules(ruleString)
+        val reasoner = GenericRuleReasoner(rules)
+
+        // 2) 트랜잭션 내에서 추론 및 저장 (writeTx 활용)
+        val addedStatementsCount = writeTx { baseModel ->
+            // 추론 모델(InfModel) 생성
+            val infModel = ModelFactory.createInfModel(reasoner, baseModel)
+
+            // 추론 실행 준비
+            infModel.prepare()
+
+            // 베이스 모델에 이미 있는 내용을 제외하고, "새롭게 추론된 내용"만 추출
+            val deductions = infModel.deductionsModel
+            val count = deductions.size()
+
+            // 베이스 모델에 반영 (Materialize)
+            if (count > 0) {
+                baseModel.add(deductions)
+            }
+
+            count
+        }
+
+        val elapsed = System.currentTimeMillis() - t0
+        logger.info("Jena Rule applied: inferred $addedStatementsCount triples in $elapsed ms")
+
+        return Pair(addedStatementsCount, elapsed)
+    }
 }

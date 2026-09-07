@@ -288,7 +288,7 @@ class WebController(private val ontology: Ontology) {
                 VALUES ?k {
                   owl:someValuesFrom owl:allValuesFrom owl:hasValue
                   owl:minCardinality owl:maxCardinality owl:cardinality
-                  owl|minQualifiedCardinality owl|maxQualifiedCardinality owl:onClass
+                  owl:minQualifiedCardinality owl:maxQualifiedCardinality owl:onClass
                 }
                 ?r ?k ?value .
                 BIND (?k AS ?property)
@@ -427,10 +427,7 @@ class WebController(private val ontology: Ontology) {
             // 2) 저장 (트랜잭션/스냅샷은 saveOntology 내부에서 처리)
             ontology.saveOntology(filename, includeNamedGraphs = useTdb)
 
-            // 3) (선택) 기존에 사용하던 후처리가 있다면 RDF/XML일 때만 호출
-            // if (!useTdb) runCatching { fixRdfStringLiterals(filename) }
-
-            // 4) 파일 내용 읽어서 반환
+            // 3) 파일 내용 읽어서 반환
             val content = file.readText(Charsets.UTF_8)
             val dt = System.currentTimeMillis() - t0
             ResponseEntity.ok(
@@ -454,50 +451,6 @@ class WebController(private val ontology: Ontology) {
             // 5) 임시 파일 정리
             runCatching { if (file.exists()) file.delete() }
         }
-    }
-
-
-    // 제나는 리터럴 타입 스트링을 빼버림, 자기가 다시 읽을때는 상관이 없는데 protege 는 이해를 못함
-    private fun fixRdfStringLiterals(filePath: String) {
-        val inputFile = java.io.File(filePath)
-        if (!inputFile.exists()) {
-            logger.warn("File not found: $filePath")
-            return
-        }
-
-        val factory = javax.xml.parsers.DocumentBuilderFactory.newInstance()
-        factory.isNamespaceAware = true
-        val builder = factory.newDocumentBuilder()
-        val doc = builder.parse(inputFile)
-
-        val rdfNS = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
-        val xsdStringURI = "http://www.w3.org/2001/XMLSchema#string"
-
-        val allElements = doc.getElementsByTagName("*")
-        for (i in 0 until allElements.length) {
-            val elem = allElements.item(i) as org.w3c.dom.Element
-
-            // 조건: 단일 텍스트 노드를 가진 요소이며, 이미 datatype이나 xml:lang이 없음
-            if (elem.childNodes.length == 1 &&
-                elem.firstChild.nodeType == org.w3c.dom.Node.TEXT_NODE &&
-                !elem.hasAttributeNS(rdfNS, "datatype") &&
-                !elem.hasAttribute("xml:lang")
-            ) {
-
-                val textContent = elem.textContent?.trim()
-                if (!textContent.isNullOrEmpty()) {
-                    elem.setAttributeNS(rdfNS, "rdf:datatype", xsdStringURI)
-                }
-            }
-        }
-
-        val transformer = javax.xml.transform.TransformerFactory.newInstance().newTransformer()
-        transformer.transform(
-            javax.xml.transform.dom.DOMSource(doc),
-            javax.xml.transform.stream.StreamResult(inputFile)
-        )
-
-        logger.info("✔ Fixed and saved RDF/XML file: $filePath")
     }
 
 
@@ -814,9 +767,38 @@ class WebController(private val ontology: Ontology) {
         )
     }
 
+
+    @CrossOrigin(origins = ["*"])
+    @PostMapping("/rules/apply")
+    fun applyRules(@RequestBody req: RuleRequest): ResponseEntity<ApiResponse<Map<String, Any>>> {
+        logger.info("User Request POST /api/rules/apply")
+
+        if (req.rules.isBlank()) {
+            return ResponseEntity.badRequest().body(
+                ApiResponse("error", 0, mapOf("message" to "Rule string cannot be empty"))
+            )
+        }
+
+        return try {
+            // 방금 Ontology.kt에 만든 함수 호출
+            val (inferredCount, elapsedMs) = ontology.applyRulesAndMaterialize(req.rules)
+
+            ResponseEntity.ok(
+                ApiResponse(
+                    status = "ok",
+                    timeMs = elapsedMs,
+                    data = mapOf(
+                        "inferredTriplesCount" to inferredCount,
+                        "message" to "Rules successfully applied and materialized."
+                    )
+                )
+            )
+        } catch (e: Exception) {
+            logger.error("Failed to apply Jena Rules", e)
+            ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(
+                ApiResponse("error", 0, mapOf("message" to (e.message ?: "Rule execution failed")))
+            )
+        }
+    }
+
 }
-
-
-
-
-// ./gradlew bootRun

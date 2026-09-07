@@ -64,6 +64,9 @@ dependencies {
 	implementation("com.fasterxml.jackson.module:jackson-module-kotlin")
 	implementation("org.apache.kafka:kafka-clients:3.7.0")
 
+	// MQTT (FROST SensorThings MQTT ingest)
+	implementation("org.eclipse.paho:org.eclipse.paho.client.mqttv3:1.2.5")
+
 	// (선택) exclude 후 JAXB 런타임이 확실히 필요하면 아래를 명시해도 됨
 	// implementation("org.glassfish.jaxb:jaxb-runtime:4.0.3")
 }

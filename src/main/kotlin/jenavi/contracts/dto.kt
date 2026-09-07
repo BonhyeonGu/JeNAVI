@@ -82,6 +82,12 @@ data class BrowsePayload(
     val timeIncomingMs: Long?              // isProperty = false
 )
 
+
+data class RuleRequest(
+    val rules: String
+)
+
+
 // 배치 적재 요청 (옵션: dir, 포맷, 적재 후 삭제 여부)
 data class IngestRequest(
     val dir: String? = null,
