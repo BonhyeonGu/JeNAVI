@@ -4,7 +4,6 @@ import jenavi.kafka.KafkaConsumerState
 import jenavi.kafka.KafkaUpdateCounter
 import jenavi.websocket.OntologyWebSocketHandler
 import org.apache.jena.query.ReadWrite
-import org.apache.jena.ontology.OntModel
 import org.apache.jena.riot.RiotException
 import org.apache.jena.tdb2.TDB2Factory
 import org.apache.kafka.clients.consumer.ConsumerConfig
@@ -92,13 +91,10 @@ class KafkaRdfUpdater(
                     runCatching { dataset.close() }
                 }
             } else {
-                // --- In-Memory 모드: 매 poll 시점에 "현재" 모델을 가져다 씀 ---
+                // --- In-Memory 모드: writeTx로 락을 잡고 "현재" 모델에 반영 ---
                 while (running) {
                     val records = consumer.poll(Duration.ofMillis(500))
                     if (records.isEmpty) continue
-
-                    // ⬇ 매번 최신 OntModel (재초기화 후에도 최신 참조)
-                    val model: OntModel = ontology.ontologyModel
 
                     for (record in records) {
                         if (!consumerState.isActive()) continue
@@ -106,8 +102,12 @@ class KafkaRdfUpdater(
 
                         try {
                             val start = System.currentTimeMillis()
-                            xml.byteInputStream().use { input ->
-                                model.read(input, null, "RDF/XML")
+                            // writeTx가 ReentrantReadWriteLock의 write 락을 잡고,
+                            // 재초기화 후에도 최신 model에 반영한다. (query readTx와의 레이스 제거)
+                            ontology.writeTx { m ->
+                                xml.byteInputStream().use { input ->
+                                    m.read(input, null, "RDF/XML")
+                                }
                             }
                             val elapsed = System.currentTimeMillis() - start
 
