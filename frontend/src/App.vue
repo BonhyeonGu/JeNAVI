@@ -6,6 +6,8 @@
           <RouterLink to="/fast" class="link" active-class="active">빠른시작</RouterLink>
           <RouterLink to="/browser" class="link" active-class="active">브라우저</RouterLink>
           <RouterLink to="/query" class="link" active-class="active">질의기</RouterLink>
+          <RouterLink to="/realtime" class="link" active-class="active">실시간</RouterLink>
+          <RouterLink to="/experiment" class="link" active-class="active">실험</RouterLink>
           <RouterLink to="/admin" class="link" active-class="active">관리</RouterLink>
         </nav>
 

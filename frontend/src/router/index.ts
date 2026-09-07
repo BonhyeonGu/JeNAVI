@@ -5,6 +5,8 @@ const routes = [
   { path: '/fast', name: 'Fast', component: () => import('../views/FastView.vue') },
   { path: '/browser', name: 'Browser', component: () => import('../views/BrowserView.vue') },
   { path: '/query',   name: 'Query',   component: () => import('../views/QueryView.vue') },
+  { path: '/realtime', name: 'Realtime', component: () => import('../views/MqttView.vue') },
+  { path: '/experiment', name: 'Experiment', component: () => import('../views/ExperimentView.vue') },
   { path: '/admin',   name: 'Admin',   component: () => import('../views/AdminView.vue') },
 ]
 

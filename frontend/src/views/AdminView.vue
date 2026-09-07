@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import type { ApiResponse, StatusData } from '../api/types'
-import { getStatus, initOntology, uploadRdf } from '../api/endpoints'
+import { getStatus, initOntology, uploadRdf, exportNgsiLd } from '../api/endpoints'
 
 /* ─────────────── 상태 관련 ─────────────── */
 const avStatusRes = ref<ApiResponse<StatusData> | null>(null)
@@ -154,6 +154,31 @@ function onFilesChange(ev: Event) {
   files.value = input?.files ?? null
 }
 
+/* ─────────────── NGSI-LD Export ─────────────── */
+const exportType = ref('')
+const exporting = ref(false)
+const exportErr = ref<string | null>(null)
+
+async function doExportNgsiLd() {
+  exporting.value = true; exportErr.value = null
+  const startedAt = Date.now()
+  try {
+    const res = await exportNgsiLd(exportType.value)
+    pushLog({
+      label: `GET /export/ngsi-ld${exportType.value ? `?type=${exportType.value}` : ''}`,
+      ok: true,
+      ms: Date.now() - startedAt,
+      json: res,
+    })
+  } catch (e: any) {
+    const errMsg = e?.message ?? 'export failed'
+    exportErr.value = errMsg
+    pushLog({ label: 'GET /export/ngsi-ld', ok: false, ms: Date.now() - startedAt, error: errMsg })
+  } finally {
+    exporting.value = false
+  }
+}
+
 /* ─────────────── 응답 로그 ─────────────── */
 type LogEntry = {
   time: string
@@ -281,6 +306,22 @@ function clearLog() {
       <div v-if="uploading" class="inline-loading mt-2">
         <span class="spinner"></span><span>Uploading files…</span>
       </div>
+
+      <div class="divider"></div>
+
+      <div class="maint-row">
+        <div class="maint-label">
+          <h4>Export NGSI-LD</h4>
+          <p class="hint">Convert ontology content to NGSI-LD (JSON-LD) and download. Optional type filter (e.g. Thing).</p>
+        </div>
+        <div class="export-buttons">
+          <input v-model="exportType" class="type-input" placeholder="type (optional)" @keyup.enter="doExportNgsiLd" />
+          <button class="av-btn primary" @click="doExportNgsiLd" :disabled="exporting || initPending || uploading">
+            {{ exporting ? 'Exporting…' : 'Download' }}
+          </button>
+        </div>
+      </div>
+      <div v-if="exportErr" class="error">{{ exportErr }}</div>
     </section>
 
     <!-- ── 응답 로그 ─────────────────────────────── -->
@@ -398,6 +439,12 @@ function clearLog() {
   gap: 20px;
 }
 .file-input-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
+.export-buttons { display: flex; align-items: center; gap: 12px; }
+.type-input {
+  background: #1a1a1a; border: 1px solid #3a3a3a; color: #eee;
+  border-radius: 8px; padding: 6px 10px; font-size: 13px; width: 150px;
+}
+.type-input:focus { outline: none; border-color: #2a3cff; }
 .file-summary { font-size: 13px; color: #aaa; margin-top: 6px; }
 .error { color: #ff6b6b; font-size: 13px; margin-top: 6px; }
 

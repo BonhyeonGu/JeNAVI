@@ -90,6 +90,26 @@ export async function dumpRdf(): Promise<ApiResponse<string>> {
   return r.json();
 }
 
+// /api/export/ngsi-ld (GET) — 온톨로지 내용을 NGSI-LD(JSON-LD)로 변환·다운로드
+export async function exportNgsiLd(type?: string): Promise<{ filename: string; sizeBytes: number }> {
+  const qs = type && type.trim() ? `?type=${encodeURIComponent(type.trim())}` : '';
+  const r = await fetch(`${BASE}/export/ngsi-ld${qs}`, { method: 'GET' });
+  if (!r.ok) throw new Error((await r.text()) || `HTTP ${r.status}`);
+  const blob = await r.blob();
+  const cd = r.headers.get('Content-Disposition') ?? '';
+  const match = cd.match(/filename="?([^"]+)"?/);
+  const filename = match?.[1] ?? 'jenavi-ngsi-ld.jsonld';
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  return { filename, sizeBytes: blob.size };
+}
+
 // /api/ingest/updates (POST)
 export async function ingestUpdates(body: { dir?: string; format?: string; deleteAfter?: boolean })
 : Promise<ApiResponse<Record<string, any>>> {

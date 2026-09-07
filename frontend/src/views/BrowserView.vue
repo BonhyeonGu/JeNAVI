@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { browseApi } from '../api/endpoints'
+import { browseApi, queryRun } from '../api/endpoints'
 import type { ApiResponse, BrowsePayload, TripleRow } from '../api/types'
 
 const router = useRouter()
@@ -13,6 +13,10 @@ const res = ref<ApiResponse<BrowsePayload> | null>(null)
 const err = ref<string | null>(null)
 const copiedText = ref<string | null>(null)
 let copiedTimer: number | undefined
+
+const STA = 'https://paper.9bon.org/ontologies/sensorthings/1.3#'
+type SumRow = { op: string; uom: string; count: string; avg: string; latest: string; asOf: string }
+const summary = ref<{ obsCount: string; latest: string; rows: SumRow[] } | null>(null)
 
 function shortName(u?: string | null) {
   if (!u) return ''
@@ -35,12 +39,53 @@ async function fetchBrowse(u: string) {
   loading.value = true
   err.value = null
   res.value = null
+  summary.value = null
   try {
     res.value = await browseApi({ uri: u })
+    if (detectKind(res.value?.data)) loadSummary(u)
   } catch (e: any) {
     err.value = e?.message ?? 'failed'
   } finally {
     loading.value = false
+  }
+}
+
+// 브라우징 대상이 Thing / MultiDatastream 이면 요약을 만든다
+function detectKind(payload: any): 'thing' | 'mds' | null {
+  const outs = payload?.outgoing ?? []
+  const types = outs
+    .filter((r: any) => r?.property && String(r.property).endsWith('type'))
+    .map((r: any) => String(r.value || ''))
+  if (types.some((v: string) => v.endsWith('#Thing'))) return 'thing'
+  if (types.some((v: string) => v.endsWith('#MultiDatastream'))) return 'mds'
+  return null
+}
+
+async function loadSummary(u: string) {
+  try {
+    const qIp = `PREFIX sta: <${STA}>
+      SELECT ?op ?uom ?count ?avg ?latest ?asOf WHERE {
+        { <${u}> sta:hasMultiDatastream/sta:hasIndexPoint ?ip } UNION { <${u}> sta:hasIndexPoint ?ip }
+        OPTIONAL { ?ip sta:pointToObservedProperty ?opr . ?opr sta:hasName ?op }
+        OPTIONAL { ?ip sta:pointToUnitOfMeasurement ?ur . ?ur sta:hasName ?uom }
+        OPTIONAL { ?ip sta:hasWindowedCount ?count }
+        OPTIONAL { ?ip sta:hasWindowedAverage ?avg }
+        OPTIONAL { ?ip sta:hasLatestValue ?latest }
+        OPTIONAL { ?ip sta:asOf ?asOf }
+      } ORDER BY ?op`
+    const qObs = `PREFIX sta: <${STA}>
+      SELECT (COUNT(DISTINCT ?o) AS ?n) WHERE {
+        { <${u}> sta:hasMultiDatastream/sta:hasObservation ?o } UNION { <${u}> sta:hasObservation ?o }
+      }`
+    const [a, b] = await Promise.all([queryRun(qIp), queryRun(qObs)])
+    const rows: SumRow[] = (a.data ?? []).map(r => ({
+      op: r[0] ?? '', uom: r[1] ?? '', count: r[2] ?? '', avg: r[3] ?? '', latest: r[4] ?? '', asOf: r[5] ?? '',
+    }))
+    const latest = rows.map(r => r.asOf).filter(Boolean).sort().pop() ?? ''
+    const obsCount = (b.data?.[0]?.[0]) ?? '0'
+    summary.value = { obsCount, latest, rows }
+  } catch {
+    summary.value = null
   }
 }
 
@@ -100,6 +145,28 @@ const isUri = (s?: string | null) => !!s && /^https?:\/\//i.test(s)
 
     <!-- 결과 -->
     <div v-if="res?.data">
+      <!-- 요약 (Thing / MultiDatastream) -->
+      <div v-if="summary" class="summary">
+        <h3 class="headline">요약</h3>
+        <div class="sum-stats">
+          <div class="sum"><div class="sum-l">관측 수</div><div class="sum-v">{{ summary.obsCount }}</div></div>
+          <div class="sum"><div class="sum-l">최신 갱신</div><div class="sum-v small mono">{{ summary.latest || '-' }}</div></div>
+          <div class="sum"><div class="sum-l">IndexPoint</div><div class="sum-v">{{ summary.rows.length }}</div></div>
+        </div>
+        <table class="table" v-if="summary.rows.length" style="margin-top:10px">
+          <thead><tr><th>op / uom</th><th>최신 값</th><th>평균</th><th>윈도우 수</th><th>asOf</th></tr></thead>
+          <tbody>
+            <tr v-for="(r,i) in summary.rows" :key="i">
+              <td class="mono">{{ r.op }}<span v-if="r.uom"> / {{ r.uom }}</span></td>
+              <td class="mono" style="color:#7bf1a8; font-weight:600">{{ r.latest || '-' }}</td>
+              <td class="mono">{{ r.avg || '-' }}</td>
+              <td class="mono">{{ r.count || '-' }}</td>
+              <td class="mono" style="color:var(--muted)">{{ r.asOf || '-' }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
       <p class="badge">
         URI:
         <span class="mono">{{ shortName(res.data.resourceURI) }}</span>
@@ -250,6 +317,13 @@ const isUri = (s?: string | null) => !!s && /^https?:\/\//i.test(s)
 }
 
 .badge { color: var(--muted); margin: 8px 0 16px; }
+
+.summary { background: #141414; border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; margin-bottom: 16px; }
+.sum-stats { display: flex; gap: 24px; flex-wrap: wrap; }
+.sum { display: flex; flex-direction: column; gap: 2px; }
+.sum-l { font-size: 12px; color: var(--muted); }
+.sum-v { font-size: 20px; font-weight: 700; }
+.sum-v.small { font-size: 13px; font-weight: 500; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 
 .headline {
